@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use codex_config::CONFIG_TOML_FILE;
 use codex_config::default_project_root_markers;
 use codex_config::find_project_root;
 use codex_config::project_root_markers_from_config;
@@ -31,6 +30,7 @@ use super::onboarding_screen::StepState;
 pub(crate) struct TrustDirectoryWidget {
     pub codex_home: PathBuf,
     pub cwd: PathBuf,
+    pub project_root_markers: Vec<String>,
     pub show_windows_create_sandbox_hint: bool,
     pub should_quit: bool,
     pub selection: Option<TrustDirectorySelection>,
@@ -146,7 +146,7 @@ impl StepStateProvider for TrustDirectoryWidget {
 
 impl TrustDirectoryWidget {
     fn handle_trust(&mut self) {
-        let target = trust_target_for_cwd(&self.codex_home, &self.cwd);
+        let target = trust_target_for_cwd(&self.cwd, &self.project_root_markers);
         if let Err(e) = set_project_trust_level(&self.codex_home, &target, TrustLevel::Trusted) {
             tracing::error!("Failed to set project trusted: {e:?}");
             self.error = Some(format!("Failed to set trust for {}: {e}", target.display()));
@@ -165,26 +165,21 @@ impl TrustDirectoryWidget {
     }
 }
 
-fn trust_target_for_cwd(codex_home: &std::path::Path, cwd: &std::path::Path) -> PathBuf {
+pub(crate) fn resolve_project_root_markers(config: &toml::Value) -> Vec<String> {
+    match project_root_markers_from_config(config) {
+        Ok(Some(markers)) => markers,
+        Ok(None) => default_project_root_markers(),
+        Err(err) => {
+            tracing::warn!("Failed to parse project_root_markers from merged config: {err}");
+            default_project_root_markers()
+        }
+    }
+}
+
+fn trust_target_for_cwd(cwd: &std::path::Path, project_root_markers: &[String]) -> PathBuf {
     if let Some(repo_root) = resolve_root_git_project_for_trust(cwd) {
         return repo_root;
     }
-
-    let config_file = codex_home.join(CONFIG_TOML_FILE);
-    let project_root_markers = std::fs::read_to_string(&config_file)
-        .ok()
-        .and_then(|contents| toml::from_str(&contents).ok())
-        .and_then(|config| match project_root_markers_from_config(&config) {
-            Ok(markers) => markers,
-            Err(err) => {
-                tracing::warn!(
-                    "Failed to parse project_root_markers from {}: {err}",
-                    config_file.display()
-                );
-                None
-            }
-        })
-        .unwrap_or_else(default_project_root_markers);
 
     find_project_root(cwd, &project_root_markers)
 }
@@ -194,6 +189,7 @@ mod tests {
     use crate::test_backend::VT100Backend;
 
     use super::*;
+    use codex_config::CONFIG_TOML_FILE;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyEventKind;
@@ -209,6 +205,7 @@ mod tests {
         let mut widget = TrustDirectoryWidget {
             codex_home: codex_home.path().to_path_buf(),
             cwd: PathBuf::from("."),
+            project_root_markers: default_project_root_markers(),
             show_windows_create_sandbox_hint: false,
             should_quit: false,
             selection: None,
@@ -234,6 +231,7 @@ mod tests {
         let widget = TrustDirectoryWidget {
             codex_home: codex_home.path().to_path_buf(),
             cwd: PathBuf::from("/workspace/project"),
+            project_root_markers: default_project_root_markers(),
             show_windows_create_sandbox_hint: false,
             should_quit: false,
             selection: None,
@@ -266,6 +264,9 @@ mod tests {
         let mut widget = TrustDirectoryWidget {
             codex_home: codex_home.path().to_path_buf(),
             cwd: nested,
+            project_root_markers: resolve_project_root_markers(
+                &toml::from_str("project_root_markers = [\".hg\"]\n").expect("parse config"),
+            ),
             show_windows_create_sandbox_hint: false,
             should_quit: false,
             selection: None,

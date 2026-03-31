@@ -25,6 +25,7 @@ use crate::onboarding::auth::SignInOption;
 use crate::onboarding::auth::SignInState;
 use crate::onboarding::trust_directory::TrustDirectorySelection;
 use crate::onboarding::trust_directory::TrustDirectoryWidget;
+use crate::onboarding::trust_directory::resolve_project_root_markers;
 use crate::onboarding::welcome::WelcomeWidget;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
@@ -86,6 +87,8 @@ impl OnboardingScreen {
             config,
         } = args;
         let cwd = config.cwd.to_path_buf();
+        let project_root_markers =
+            resolve_project_root_markers(&config.config_layer_stack.effective_config());
         let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
         let forced_login_method = config.forced_login_method;
         let codex_home = config.codex_home.clone();
@@ -129,6 +132,7 @@ impl OnboardingScreen {
             steps.push(Step::TrustDirectory(TrustDirectoryWidget {
                 cwd,
                 codex_home,
+                project_root_markers,
                 show_windows_create_sandbox_hint,
                 should_quit: false,
                 selection: None,
