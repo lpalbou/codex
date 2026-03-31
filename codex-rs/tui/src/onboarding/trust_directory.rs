@@ -1,7 +1,11 @@
 use std::path::PathBuf;
 
+use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigLayerStackOrdering;
 use codex_config::default_project_root_markers;
 use codex_config::find_project_root;
+use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
 use codex_core::config::set_project_trust_level;
 use codex_git_utils::resolve_root_git_project_for_trust;
@@ -165,7 +169,33 @@ impl TrustDirectoryWidget {
     }
 }
 
-pub(crate) fn resolve_project_root_markers(config: &toml::Value) -> Vec<String> {
+pub(crate) fn resolve_startup_project_root_markers(
+    config_layer_stack: &ConfigLayerStack,
+) -> Vec<String> {
+    // Match startup trust resolution, which computes the project root before
+    // project and legacy managed layers are loaded.
+    let mut merged = toml::Value::Table(toml::map::Map::new());
+    for layer in config_layer_stack.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ false,
+    ) {
+        match &layer.name {
+            ConfigLayerSource::Mdm { .. }
+            | ConfigLayerSource::System { .. }
+            | ConfigLayerSource::User { .. }
+            | ConfigLayerSource::SessionFlags => {
+                merge_toml_values(&mut merged, &layer.config);
+            }
+            ConfigLayerSource::Project { .. }
+            | ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. }
+            | ConfigLayerSource::LegacyManagedConfigTomlFromMdm => {}
+        }
+    }
+
+    resolve_project_root_markers(&merged)
+}
+
+fn resolve_project_root_markers(config: &toml::Value) -> Vec<String> {
     match project_root_markers_from_config(config) {
         Ok(Some(markers)) => markers,
         Ok(None) => default_project_root_markers(),
@@ -181,7 +211,7 @@ fn trust_target_for_cwd(cwd: &std::path::Path, project_root_markers: &[String]) 
         return repo_root;
     }
 
-    find_project_root(cwd, &project_root_markers)
+    find_project_root(cwd, project_root_markers)
 }
 
 #[cfg(test)]
@@ -189,7 +219,13 @@ mod tests {
     use crate::test_backend::VT100Backend;
 
     use super::*;
+    use codex_app_server_protocol::ConfigLayerSource;
     use codex_config::CONFIG_TOML_FILE;
+    use codex_config::ConfigLayerEntry;
+    use codex_config::ConfigLayerStack;
+    use codex_config::ConfigRequirements;
+    use codex_config::ConfigRequirementsToml;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyEventKind;
@@ -289,5 +325,39 @@ mod tests {
         );
         assert_eq!(widget.selection, Some(TrustDirectorySelection::Trust));
         assert_eq!(widget.error, None);
+    }
+
+    #[test]
+    fn resolve_startup_project_root_markers_ignores_project_layers() {
+        let codex_home = TempDir::new().expect("temp home");
+        let user_file =
+            AbsolutePathBuf::from_absolute_path(codex_home.path().join(CONFIG_TOML_FILE))
+                .expect("absolute user config path");
+        let project_dot_codex =
+            AbsolutePathBuf::from_absolute_path(codex_home.path().join("project").join(".codex"))
+                .expect("absolute project config path");
+        let layers = vec![
+            ConfigLayerEntry::new(
+                ConfigLayerSource::User { file: user_file },
+                toml::from_str("project_root_markers = [\".git\"]\n").expect("parse user config"),
+            ),
+            ConfigLayerEntry::new(
+                ConfigLayerSource::Project {
+                    dot_codex_folder: project_dot_codex,
+                },
+                toml::from_str("project_root_markers = [\".hg\"]\n").expect("parse project config"),
+            ),
+        ];
+        let config_layer_stack = ConfigLayerStack::new(
+            layers,
+            ConfigRequirements::default(),
+            ConfigRequirementsToml::default(),
+        )
+        .expect("config layer stack");
+
+        assert_eq!(
+            resolve_startup_project_root_markers(&config_layer_stack),
+            vec![".git".to_string()]
+        );
     }
 }
