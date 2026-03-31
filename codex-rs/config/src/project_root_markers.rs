@@ -1,4 +1,6 @@
 use std::io;
+use std::path::Path;
+use std::path::PathBuf;
 
 use toml::Value as TomlValue;
 
@@ -47,4 +49,63 @@ pub fn default_project_root_markers() -> Vec<String> {
         .iter()
         .map(ToString::to_string)
         .collect()
+}
+
+/// Finds the nearest ancestor that contains one of the configured project root markers.
+///
+/// If `project_root_markers` is empty, root detection is disabled and `cwd` is
+/// returned unchanged. If no marker is found, `cwd` is returned unchanged.
+pub fn find_project_root(cwd: &Path, project_root_markers: &[String]) -> PathBuf {
+    if project_root_markers.is_empty() {
+        return cwd.to_path_buf();
+    }
+
+    for ancestor in cwd.ancestors() {
+        for marker in project_root_markers {
+            if ancestor.join(marker).exists() {
+                return ancestor.to_path_buf();
+            }
+        }
+    }
+
+    cwd.to_path_buf()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+
+    #[test]
+    fn find_project_root_returns_nearest_marker_ancestor() {
+        let tmp = TempDir::new().expect("tempdir");
+        let project_root = tmp.path().join("project");
+        let nested = project_root.join("child").join("grandchild");
+        std::fs::create_dir_all(&nested).expect("create nested dir");
+        std::fs::write(project_root.join(".hg"), "").expect("write marker");
+
+        assert_eq!(
+            find_project_root(&nested, &[".hg".to_string()]),
+            project_root
+        );
+    }
+
+    #[test]
+    fn find_project_root_returns_cwd_when_markers_are_empty() {
+        let tmp = TempDir::new().expect("tempdir");
+        let nested = tmp.path().join("child");
+        std::fs::create_dir_all(&nested).expect("create nested dir");
+
+        assert_eq!(find_project_root(&nested, &[]), nested);
+    }
+
+    #[test]
+    fn find_project_root_returns_cwd_when_no_marker_matches() {
+        let tmp = TempDir::new().expect("tempdir");
+        let nested = tmp.path().join("child");
+        std::fs::create_dir_all(&nested).expect("create nested dir");
+
+        assert_eq!(find_project_root(&nested, &[".hg".to_string()]), nested);
+    }
 }

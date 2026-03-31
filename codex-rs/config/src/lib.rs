@@ -53,6 +53,7 @@ pub use fingerprint::version_for_toml;
 pub use merge::merge_toml_values;
 pub use overrides::build_cli_overrides_layer;
 pub use project_root_markers::default_project_root_markers;
+pub use project_root_markers::find_project_root;
 pub use project_root_markers::project_root_markers_from_config;
 pub use requirements_exec_policy::RequirementsExecPolicy;
 pub use requirements_exec_policy::RequirementsExecPolicyDecisionToml;
