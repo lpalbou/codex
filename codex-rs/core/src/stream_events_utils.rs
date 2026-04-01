@@ -24,6 +24,7 @@ use crate::tools::router::ToolRouter;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_utils_stream_parser::strip_proposed_plan_blocks;
@@ -129,6 +130,14 @@ pub(crate) async fn record_completed_response_item(
 ) {
     sess.record_conversation_items(turn_context, std::slice::from_ref(item))
         .await;
+    let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
+    if completed_item_crosses_answer_boundary(item, plan_mode) {
+        // Once terminal answer text has been persisted for this turn, MultiAgentV2 queue-only
+        // child notifications must stop feeding the same turn. Leaving them in the mailbox keeps
+        // the already-visible answer stable while still preserving the notification for later.
+        sess.mark_turn_answer_boundary_crossed(&turn_context.sub_id)
+            .await;
+    }
     maybe_mark_thread_memory_mode_polluted_from_web_search(sess, turn_context, item).await;
     record_stage1_output_usage_for_completed_item(turn_context, item).await;
 }
@@ -424,6 +433,21 @@ pub(crate) fn last_assistant_message_from_item(
         return Some(stripped);
     }
     None
+}
+
+fn completed_item_crosses_answer_boundary(item: &ResponseItem, plan_mode: bool) -> bool {
+    let ResponseItem::Message { role, phase, .. } = item else {
+        return false;
+    };
+    if role != "assistant" || matches!(phase, Some(MessagePhase::Commentary)) {
+        // Commentary is intentionally excluded. The assistant is still mid-turn there, so mailbox
+        // mail may still legitimately fold into the same turn before the final answer is known.
+        return false;
+    }
+
+    // `None` phase is treated conservatively as answer-boundary text because older providers do
+    // not tag phases consistently, and the reported bug occurs on those legacy-shaped messages.
+    last_assistant_message_from_item(item, plan_mode).is_some()
 }
 
 pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Option<ResponseItem> {

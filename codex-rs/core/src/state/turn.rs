@@ -81,6 +81,11 @@ pub(crate) struct TurnState {
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pending_input: Vec<ResponseInputItem>,
+    // Once a turn has emitted terminal-or-unknown assistant answer text, queue-only inter-agent
+    // mail should no longer be folded back into that same turn. Otherwise a child completion can
+    // arrive after the parent has already answered and cause a second continuation in the same
+    // visible turn.
+    answer_boundary_crossed: bool,
     granted_permissions: Option<PermissionProfile>,
     pub(crate) tool_calls: u64,
     pub(crate) token_usage_at_turn_start: TokenUsage,
@@ -200,6 +205,14 @@ impl TurnState {
 
     pub(crate) fn has_pending_input(&self) -> bool {
         !self.pending_input.is_empty()
+    }
+
+    pub(crate) fn mark_answer_boundary_crossed(&mut self) {
+        self.answer_boundary_crossed = true;
+    }
+
+    pub(crate) fn answer_boundary_crossed(&self) -> bool {
+        self.answer_boundary_crossed
     }
 
     pub(crate) fn record_granted_permissions(&mut self, permissions: PermissionProfile) {

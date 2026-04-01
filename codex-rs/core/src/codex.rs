@@ -4037,6 +4037,43 @@ impl Session {
         }
     }
 
+    /// Returns whether the active turn has already crossed the answer boundary.
+    ///
+    /// In the MultiAgentV2 mailbox flow, queue-only inter-agent mail should stop feeding the
+    /// current turn once the assistant has already emitted terminal answer text for that turn.
+    /// Otherwise a late child completion can append a second continuation after the answer the
+    /// user already saw.
+    pub(crate) async fn active_turn_crossed_answer_boundary(&self) -> bool {
+        let turn_state = {
+            let active = self.active_turn.lock().await;
+            active.as_ref().map(|at| Arc::clone(&at.turn_state))
+        };
+        let Some(turn_state) = turn_state else {
+            return false;
+        };
+        turn_state.lock().await.answer_boundary_crossed()
+    }
+
+    /// Marks the active turn as having crossed the answer boundary.
+    ///
+    /// Commentary-only assistant messages do not call this. We flip the bit only once the turn
+    /// has emitted a terminal-or-unknown assistant answer message, because that is the point
+    /// where queue-only MultiAgentV2 mail must stop extending the same visible turn.
+    pub(crate) async fn mark_turn_answer_boundary_crossed(&self, sub_id: &str) {
+        let turn_state = {
+            let active = self.active_turn.lock().await;
+            active.as_ref().and_then(|at| {
+                at.tasks
+                    .contains_key(sub_id)
+                    .then(|| Arc::clone(&at.turn_state))
+            })
+        };
+        let Some(turn_state) = turn_state else {
+            return;
+        };
+        turn_state.lock().await.mark_answer_boundary_crossed();
+    }
+
     pub(crate) fn subscribe_mailbox_seq(&self) -> watch::Receiver<u64> {
         self.mailbox.subscribe()
     }
@@ -4062,16 +4099,22 @@ impl Session {
     }
 
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
-        let pending_input = {
+        let (pending_input, defer_mailbox_items) = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.take_pending_input()
+                    (ts.take_pending_input(), ts.answer_boundary_crossed())
                 }
-                None => Vec::new(),
+                None => (Vec::new(), false),
             }
         };
+        if defer_mailbox_items {
+            // The current turn has already shown user-visible assistant text. Leave mailbox mail
+            // queued so it can be handled by a later turn instead of extending the already-shown
+            // answer with a child completion that arrived slightly too late.
+            return pending_input;
+        }
         let mailbox_items = {
             let mut mailbox_rx = self.mailbox_rx.lock().await;
             mailbox_rx
@@ -4111,7 +4154,12 @@ impl Session {
     }
 
     pub async fn has_pending_input(&self) -> bool {
-        if self.mailbox_rx.lock().await.has_pending() {
+        // Once the active turn has emitted visible assistant text, queued mailbox mail should no
+        // longer force another same-turn follow-up. The mail remains buffered and will be picked
+        // up by a later explicit turn, or by the synthetic wake-up path for trigger-turn mail.
+        if !self.active_turn_crossed_answer_boundary().await
+            && self.mailbox_rx.lock().await.has_pending()
+        {
             return true;
         }
         let active = self.active_turn.lock().await;

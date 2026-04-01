@@ -18,6 +18,7 @@ use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
 
 use codex_features::Features;
+use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -79,6 +80,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ConversationAudioParams;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::W3cTraceContext;
@@ -4786,6 +4788,110 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
     .await;
 
     assert_eq!(sess.get_pending_input().await, vec![queued_item]);
+}
+
+#[tokio::test]
+async fn multi_agent_v2_queue_only_mail_waits_for_next_turn_after_answer_boundary() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let input = vec![UserInput::Text {
+        text: "start root turn".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.spawn_task(
+        Arc::clone(&tc),
+        input,
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    // This test models the exact MultiAgentV2 race we care about:
+    // 1. the parent still has an active regular turn;
+    // 2. that turn has already persisted its visible answer text; and
+    // 3. a queue-only child notification arrives before the parent reaches TurnComplete.
+    //
+    // In the buggy behavior, `has_pending_input()` would notice mailbox mail and schedule one more
+    // same-turn follow-up, which is how the child notification ended up appended after the
+    // parent's already-visible answer.
+    sess.mark_turn_answer_boundary_crossed(&tc.sub_id).await;
+
+    let worker_path = AgentPath::try_from("/root/worker").expect("worker path should parse");
+    let communication = InterAgentCommunication::new(
+        worker_path,
+        AgentPath::root(),
+        Vec::new(),
+        "late child completion".to_string(),
+        /*trigger_turn*/ false,
+    );
+    sess.enqueue_mailbox_communication(communication.clone());
+
+    // While the answered parent turn is still active, queue-only mailbox mail must stay buffered.
+    // The current turn should not observe more pending input, and draining pending input should
+    // leave the mailbox item untouched for later.
+    assert!(
+        !sess.has_pending_input().await,
+        "queue-only MultiAgentV2 mail should not continue an already-answered turn"
+    );
+    assert_eq!(
+        sess.get_pending_input().await,
+        Vec::<ResponseInputItem>::new(),
+        "answered turn should not drain queue-only MultiAgentV2 mail from the mailbox"
+    );
+
+    // Once the active turn is gone, the same mailbox item becomes available for the next explicit
+    // turn. That proves the fix defers the notification rather than dropping it.
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    assert_eq!(
+        sess.get_pending_input().await,
+        vec![communication.to_response_input_item()],
+        "next turn should inherit the preserved MultiAgentV2 mailbox message"
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_trigger_turn_mail_stays_queued_after_answer_boundary() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let input = vec![UserInput::Text {
+        text: "start root turn".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.spawn_task(
+        Arc::clone(&tc),
+        input,
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    // This companion regression protects the auto-wake path. We still want trigger-turn mailbox
+    // messages to remain eligible for the post-turn synthetic wake-up once the active answered
+    // turn is gone; we just do not want them to extend the answered turn itself.
+    sess.mark_turn_answer_boundary_crossed(&tc.sub_id).await;
+    sess.enqueue_mailbox_communication(InterAgentCommunication::new(
+        AgentPath::try_from("/root/worker").expect("worker path should parse"),
+        AgentPath::root(),
+        Vec::new(),
+        "late interruptible task".to_string(),
+        /*trigger_turn*/ true,
+    ));
+
+    assert!(
+        !sess.has_pending_input().await,
+        "trigger-turn mailbox work should not extend an answered active turn"
+    );
+
+    // Clearing the active turn must leave the wake-up signal intact. `maybe_start_turn_for_pending_work`
+    // keys off this exact predicate, so preserving it here means the synthetic next turn can still
+    // start after normal task shutdown.
+    sess.abort_all_tasks(TurnAbortReason::Replaced).await;
+    assert!(
+        sess.has_trigger_turn_mailbox_items().await,
+        "trigger-turn mailbox work should remain available after the answered turn finishes"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
