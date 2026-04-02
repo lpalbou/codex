@@ -1,24 +1,24 @@
-use codex_core::AuthManager;
-use codex_core::CodexAuth;
 use codex_core::ModelClient;
-use codex_core::ModelProviderAuthInfo;
 use codex_core::ModelProviderInfo;
 use codex_core::NewThread;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ThreadManager;
 use codex_core::WireApi;
-use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
-use codex_core::default_client::originator;
 use codex_core::error::CodexErr;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_features::Feature;
+use codex_login::AuthCredentialsStoreMode;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
+use codex_login::default_client::originator;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
@@ -190,7 +190,7 @@ mv tokens.next tokens.txt
             let script_path = tempdir.path().join("print-token.ps1");
             std::fs::write(
                 &script_path,
-                r#"$lines = Get-Content -Path tokens.txt
+                r#"$lines = @(Get-Content -Path tokens.txt)
 if ($lines.Count -eq 0) { exit 1 }
 Write-Output $lines[0]
 $lines | Select-Object -Skip 1 | Set-Content -Path tokens.txt
@@ -220,7 +220,7 @@ $lines | Select-Object -Skip 1 | Set-Content -Path tokens.txt
             command: self.command.clone(),
             args: self.args.clone(),
             timeout_ms: non_zero_u64(/*value*/ 1_000),
-            refresh_interval_ms: non_zero_u64(/*value*/ 60_000),
+            refresh_interval_ms: 60_000,
             cwd: match codex_utils_absolute_path::AbsolutePathBuf::try_from(self.tempdir.path()) {
                 Ok(cwd) => cwd,
                 Err(err) => panic!("tempdir should be absolute: {err}"),
@@ -804,6 +804,7 @@ async fn provider_auth_command_refreshes_after_401() {
 ///
 /// The caller owns the server-side assertions, so this helper only validates that the request
 /// reaches `Completed` without surfacing an auth or transport error to the client.
+#[expect(clippy::expect_used, clippy::unwrap_used)]
 async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuthInfo) {
     let provider = ModelProviderInfo {
         name: "corp".into(),
