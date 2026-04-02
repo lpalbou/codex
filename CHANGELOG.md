@@ -4,9 +4,17 @@ Upstream changelog: https://github.com/openai/codex/releases
 
 ## Fork changes (lpalbou/codex)
 
-This fork exists to help enforce using a single model + reasoning effort (for example
-`gpt-5.2` + `model_reasoning_effort = "xhigh"`) consistently across Codex tasks, including
-sub-agents.
+Fork notes: `docs/lpalbou-fork.md`.
+
+This fork advocates for **depth over speed**: I would rather wait 1h+ for a single, careful,
+agentic orchestration than supervise 10 fast iterations full of mistakes.
+
+Slower runs also make the system easier to observe (I can follow what’s happening in real time),
+and reduce the “tsunami” of trial-and-error text that comes from rapid, shallow retries.
+
+Concretely, this fork aims to keep model selection + reasoning effort (for example `gpt-5.2` +
+`model_reasoning_effort = "xhigh"`) predictable and consistent across Codex tasks, including
+spawned sub-agents.
 
 ### Unreleased
 
