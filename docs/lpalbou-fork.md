@@ -30,8 +30,15 @@ The main goal is to make it easy to run Codex with a single model + reasoning ef
 
 ## Sub-agent observability (v0.87)
 
-Codex v0.87 does not provide a dedicated “agent dashboard” in the TUI, but you can still observe
-sub-agents in a few practical ways:
+This fork adds a dedicated live “agent dashboard” in the TUI:
+
+- Run `/agents` to open a real-time dashboard of spawned sub-agents (press Esc to close).
+- The dashboard summarizes each agent’s status, last action (tools + collab ops), approvals, model
+  selection, and context-window usage (current/max when available).
+- Note: this dashboard shows **real** spawned sub-agents (threads). To enable spawning, you must
+  enable the `collab` feature (it’s disabled by default in upstream v0.87): `codex --enable collab`.
+
+You can also observe sub-agents in a few other practical ways:
 
 - **In the TUI chat history:** collab events (`spawn_agent`, `send_input`, `wait`, `close_agent`)
   include agent IDs and status snapshots.
@@ -41,6 +48,39 @@ sub-agents in a few practical ways:
   - Resume the session by ID: `codex resume <agent_id>`.
 - **Logs:** the TUI writes logs to `$CODEX_HOME/log/codex-tui.log`. You can follow it with:
   `tail -F $CODEX_HOME/log/codex-tui.log` and increase verbosity via `RUST_LOG`.
+
+## Local install (side-by-side)
+
+To keep your current `codex` and also have a second binary (for example `codex-best`) pointing at
+this fork:
+
+```bash
+# From the repo root:
+cd codex-rs
+
+# Build a release binary.
+cargo build -p codex-cli --release
+
+# Install a side-by-side alias.
+mkdir -p ~/.local/bin
+ln -sf "$(pwd)/target/release/codex" ~/.local/bin/codex-best
+
+# Ensure ~/.local/bin is on PATH (example for zsh: add this line to ~/.zshrc, then restart shell):
+# export PATH="$HOME/.local/bin:$PATH"
+
+# Verify.
+codex-best --version
+```
+
+## Quick smoke test: `/agents`
+
+1. Run `codex-best --enable collab` to open the TUI with sub-agent tools enabled.
+2. In the composer, send a prompt that forces sub-agent usage, for example:
+   “Use the `spawn_agent` tool (do not simulate) to create 2 sub-agents. Agent 1 runs `ls` and reports back. Agent 2 runs `grep -n \"Collab\" codex-rs/core/src/tools/handlers/collab.rs` and reports back. Then wait for them and close both agents.”
+3. While Codex is working, type `/agents` and press Enter.
+4. Confirm you see agents appear, their status changes, last actions update, and context usage is
+   shown when available.
+5. Press Esc to close the dashboard.
 
 ## Max sub-agents (v0.87)
 
@@ -62,4 +102,3 @@ Each agent thread is a full session and follows the same compaction rules as the
 - With `remote_compaction` enabled (and an OpenAI provider), compaction uses the Compact endpoint.
 - Otherwise, compaction is performed “locally” by running a dedicated compaction turn via the
   normal model request path (and will honor `model_reasoning_effort`).
-

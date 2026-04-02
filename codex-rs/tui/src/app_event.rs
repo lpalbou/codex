@@ -42,6 +42,11 @@ pub(crate) enum WindowsSandboxFallbackReason {
 #[derive(Debug)]
 pub(crate) enum AppEvent {
     CodexEvent(Event),
+    /// Non-approval events from spawned sub-agents.
+    ExternalThreadEvent {
+        thread_id: ThreadId,
+        event: Event,
+    },
     ExternalApprovalRequest {
         thread_id: ThreadId,
         event: Event,
@@ -89,6 +94,9 @@ pub(crate) enum AppEvent {
 
     /// Result of computing a `/diff` command.
     DiffResult(String),
+
+    /// Open a live agents dashboard (spawned sub-agents).
+    OpenAgentsOverlay,
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 

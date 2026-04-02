@@ -36,6 +36,7 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
 mod additional_dirs;
+mod agents_dashboard;
 mod app;
 mod app_backtrack;
 mod app_event;

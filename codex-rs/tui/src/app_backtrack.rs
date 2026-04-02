@@ -80,19 +80,28 @@ impl App {
                     Ok(true)
                 }
             }
-        } else if let TuiEvent::Key(KeyEvent {
-            code: KeyCode::Esc,
-            kind: KeyEventKind::Press | KeyEventKind::Repeat,
-            ..
-        }) = event
-        {
-            // First Esc in transcript overlay: begin backtrack preview at latest user message.
-            self.begin_overlay_backtrack_preview(tui);
-            Ok(true)
         } else {
-            // Not in backtrack mode: forward events to the overlay widget.
-            self.overlay_forward_event(tui, event)?;
-            Ok(true)
+            match event {
+                TuiEvent::Key(KeyEvent {
+                    code: KeyCode::Esc,
+                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                    ..
+                }) => {
+                    if matches!(self.overlay, Some(Overlay::Transcript(_))) {
+                        // First Esc in transcript overlay: begin backtrack preview at latest user
+                        // message.
+                        self.begin_overlay_backtrack_preview(tui);
+                    } else {
+                        self.overlay_forward_event(tui, event)?;
+                    }
+                    Ok(true)
+                }
+                other => {
+                    // Not in backtrack mode: forward events to the overlay widget.
+                    self.overlay_forward_event(tui, other)?;
+                    Ok(true)
+                }
+            }
         }
     }
 

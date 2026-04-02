@@ -1,0 +1,23 @@
+---
+source: tui/src/agents_dashboard.rs
+expression: lines_to_plain_text(&lines)
+---
+Agents: 2  1 running, 1 done  updated 12:00:00
+
+• 00000000-0000-0000-0000-000000000001  running
+  model: gpt-5.2 (xhigh)
+  task: find and fix the failing test
+  context: 76% left (40K used / 128K)
+  approvals: waiting
+  doing: shell: cargo test -p codex-tui
+  last user: please investigate
+  last assistant: working on it
+  updated: 12:00:01 (created 11:59:00)
+
+• 00000000-0000-0000-0000-000000000002  done  parent: 00000000-0000-0000-0000-000000000001
+  model: gpt-5.2 (high)
+  context: usage pending (max 200K)
+  doing: sent input to 00000000-0000-0000-0000-000000000003
+  last assistant: all good
+  warning: minor warning
+  updated: 11:59:00 (created 11:59:00)

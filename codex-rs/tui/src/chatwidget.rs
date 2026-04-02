@@ -2104,6 +2104,9 @@ impl ChatWidget {
             SlashCommand::Status => {
                 self.add_status_output();
             }
+            SlashCommand::Agents => {
+                self.app_event_tx.send(AppEvent::OpenAgentsOverlay);
+            }
             SlashCommand::Ps => {
                 self.add_ps_output();
             }

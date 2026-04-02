@@ -1,3 +1,5 @@
+use crate::agents_dashboard::AgentsDashboard;
+use crate::agents_dashboard::AgentsDashboardRenderable;
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
@@ -33,7 +35,6 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
-#[cfg(target_os = "windows")]
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
@@ -66,6 +67,7 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread;
@@ -353,6 +355,7 @@ pub(crate) struct App {
 
     // TODO(jif) drop once new UX is here.
     // Track external agent approvals spawned via AgentControl.
+    pub(crate) agents_dashboard: Arc<Mutex<AgentsDashboard>>,
     /// Map routed approval IDs to their originating external threads and original IDs.
     external_approval_routes: HashMap<String, (ThreadId, String)>,
     /// Buffered Codex events while external approvals are pending.
@@ -506,6 +509,7 @@ impl App {
             pending_update_action: None,
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
+            agents_dashboard: Arc::new(Mutex::new(AgentsDashboard::default())),
             external_approval_routes: HashMap::new(),
             paused_codex_events: VecDeque::new(),
         };
@@ -876,12 +880,24 @@ impl App {
                 self.chat_widget.on_commit_tick();
             }
             AppEvent::CodexEvent(event) => {
+                if let Some(thread_id) = self.chat_widget.thread_id()
+                    && should_track_agent_event(&event.msg)
+                    && let Ok(mut dashboard) = self.agents_dashboard.lock()
+                {
+                    dashboard.on_event(thread_id, &event);
+                }
                 if !self.external_approval_routes.is_empty() {
                     // Store the events while the approval is pending.
                     self.paused_codex_events.push_back(event);
                     return Ok(AppRunControl::Continue);
                 }
                 self.handle_codex_event_now(event);
+            }
+            AppEvent::ExternalThreadEvent { thread_id, event } => {
+                if let Ok(mut dashboard) = self.agents_dashboard.lock() {
+                    dashboard.on_event(thread_id, &event);
+                }
+                tui.frame_requester().schedule_frame();
             }
             AppEvent::ExternalApprovalRequest { thread_id, event } => {
                 self.handle_external_approval_request(thread_id, event);
@@ -956,6 +972,17 @@ impl App {
                 self.overlay = Some(Overlay::new_static_with_lines(
                     pager_lines,
                     "D I F F".to_string(),
+                ));
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenAgentsOverlay => {
+                let _ = tui.enter_alt_screen();
+                self.overlay = Some(Overlay::new_static_with_renderables(
+                    vec![Box::new(AgentsDashboardRenderable::new(
+                        Arc::clone(&self.agents_dashboard),
+                        self.config.features.enabled(Feature::Collab),
+                    ))],
+                    "A G E N T S".to_string(),
                 ));
                 tui.frame_requester().schedule_frame();
             }
@@ -1437,6 +1464,9 @@ impl App {
     /// `event` is the approval request event whose id is rewritten so replies
     /// can be routed back to the correct thread.
     fn handle_external_approval_request(&mut self, thread_id: ThreadId, mut event: Event) {
+        if let Ok(mut dashboard) = self.agents_dashboard.lock() {
+            dashboard.on_event(thread_id, &event);
+        }
         match &mut event.msg {
             EventMsg::ExecApprovalRequest(_) | EventMsg::ApplyPatchApprovalRequest(_) => {
                 let original_id = event.id.clone();
@@ -1472,6 +1502,10 @@ impl App {
     }
 
     async fn handle_thread_created(&mut self, thread_id: ThreadId) -> Result<()> {
+        if let Ok(mut dashboard) = self.agents_dashboard.lock() {
+            dashboard.track_thread_created(thread_id);
+        }
+
         let thread = match self.server.get_thread(thread_id).await {
             Ok(thread) => thread,
             Err(err) => {
@@ -1489,11 +1523,49 @@ impl App {
                         break;
                     }
                 };
-                match event.msg {
-                    EventMsg::ExecApprovalRequest(_) | EventMsg::ApplyPatchApprovalRequest(_) => {
-                        app_event_tx.send(AppEvent::ExternalApprovalRequest { thread_id, event });
-                    }
-                    _ => {}
+
+                let is_approval = matches!(
+                    event.msg,
+                    EventMsg::ExecApprovalRequest(_) | EventMsg::ApplyPatchApprovalRequest(_)
+                );
+                if is_approval {
+                    app_event_tx.send(AppEvent::ExternalApprovalRequest { thread_id, event });
+                    continue;
+                }
+
+                let should_forward = matches!(
+                    event.msg,
+                    EventMsg::SessionConfigured(_)
+                        | EventMsg::TokenCount(_)
+                        | EventMsg::TurnStarted(_)
+                        | EventMsg::TurnComplete(_)
+                        | EventMsg::TurnAborted(_)
+                        | EventMsg::ShutdownComplete
+                        | EventMsg::Error(_)
+                        | EventMsg::Warning(_)
+                        | EventMsg::BackgroundEvent(_)
+                        | EventMsg::StreamError(_)
+                        | EventMsg::UserMessage(_)
+                        | EventMsg::AgentMessage(_)
+                        | EventMsg::ExecCommandBegin(_)
+                        | EventMsg::ExecCommandEnd(_)
+                        | EventMsg::McpToolCallBegin(_)
+                        | EventMsg::McpToolCallEnd(_)
+                        | EventMsg::WebSearchBegin(_)
+                        | EventMsg::WebSearchEnd(_)
+                        | EventMsg::PatchApplyBegin(_)
+                        | EventMsg::PatchApplyEnd(_)
+                        | EventMsg::CollabAgentSpawnBegin(_)
+                        | EventMsg::CollabAgentSpawnEnd(_)
+                        | EventMsg::CollabAgentInteractionBegin(_)
+                        | EventMsg::CollabAgentInteractionEnd(_)
+                        | EventMsg::CollabWaitingBegin(_)
+                        | EventMsg::CollabWaitingEnd(_)
+                        | EventMsg::CollabCloseBegin(_)
+                        | EventMsg::CollabCloseEnd(_)
+                );
+                if should_forward {
+                    app_event_tx.send(AppEvent::ExternalThreadEvent { thread_id, event });
                 }
             }
         });
@@ -1720,6 +1792,7 @@ mod tests {
     use ratatui::prelude::Line;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use std::sync::Mutex;
     use std::sync::atomic::AtomicBool;
     use tempfile::tempdir;
 
@@ -1755,6 +1828,7 @@ mod tests {
             pending_update_action: None,
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
+            agents_dashboard: Arc::new(Mutex::new(AgentsDashboard::default())),
             external_approval_routes: HashMap::new(),
             paused_codex_events: VecDeque::new(),
         }
@@ -1797,6 +1871,7 @@ mod tests {
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
                 skip_world_writable_scan_once: false,
+                agents_dashboard: Arc::new(Mutex::new(AgentsDashboard::default())),
                 external_approval_routes: HashMap::new(),
                 paused_codex_events: VecDeque::new(),
             },

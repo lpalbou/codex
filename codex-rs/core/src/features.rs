@@ -98,6 +98,8 @@ pub enum Feature {
     EnableRequestCompression,
     /// Enable collab tools.
     Collab,
+    /// Spawned agents inherit the parent thread's context/history.
+    CollabForkContext,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
     /// Allow worker sub-agents to override the parent model selection.
@@ -435,6 +437,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "collab",
         stage: Stage::Experimental,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CollabForkContext,
+        key: "collab_fork_context",
+        stage: Stage::Experimental,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::Tui2,
