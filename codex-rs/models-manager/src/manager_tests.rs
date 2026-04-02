@@ -9,6 +9,7 @@ use codex_login::WireApi;
 use codex_api::TransportError;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::mount_models_once;
 use http::HeaderMap;
 use http::StatusCode;
@@ -176,7 +177,7 @@ $lines | Select-Object -Skip 1 | Set-Content -Path tokens.txt
             args: self.args.clone(),
             timeout_ms: NonZeroU64::new(/*value*/ 1_000).unwrap(),
             refresh_interval_ms: 60_000,
-            cwd: match codex_utils_absolute_path::AbsolutePathBuf::try_from(self.tempdir.path()) {
+            cwd: match AbsolutePathBuf::try_from(self.tempdir.path()) {
                 Ok(cwd) => cwd,
                 Err(err) => panic!("tempdir should be absolute: {err}"),
             },
