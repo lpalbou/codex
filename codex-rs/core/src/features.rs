@@ -100,6 +100,8 @@ pub enum Feature {
     Collab,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
+    /// Allow worker sub-agents to override the parent model selection.
+    WorkerModelOverride,
 }
 
 impl Feature {
@@ -397,6 +399,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RemoteModels,
         key: "remote_models",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::WorkerModelOverride,
+        key: "worker_model_override",
         stage: Stage::Experimental,
         default_enabled: false,
     },

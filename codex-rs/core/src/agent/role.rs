@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::features::Feature;
 use crate::protocol::SandboxPolicy;
 use serde::Deserialize;
 use serde::Serialize;
@@ -71,7 +72,9 @@ impl AgentRole {
         if let Some(base_instructions) = profile.base_instructions {
             config.base_instructions = Some(base_instructions.to_string());
         }
-        if let Some(model) = profile.model {
+        if let Some(model) = profile.model
+            && (self != AgentRole::Worker || config.features.enabled(Feature::WorkerModelOverride))
+        {
             config.model = Some(model.to_string());
         }
         if profile.read_only {
@@ -81,5 +84,49 @@ impl AgentRole {
                 .map_err(|err| format!("sandbox_policy is invalid: {err}"))?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ConfigBuilder;
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+
+    async fn test_config() -> (TempDir, Config) {
+        let home = TempDir::new().expect("create temp dir");
+        let config = ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+        (home, config)
+    }
+
+    #[tokio::test]
+    async fn worker_role_does_not_override_model_when_feature_disabled() {
+        let (_home, mut config) = test_config().await;
+        config.model = Some("gpt-5.2".to_string());
+        config.features.disable(Feature::WorkerModelOverride);
+
+        AgentRole::Worker
+            .apply_to_config(&mut config)
+            .expect("apply worker role");
+
+        assert_eq!(config.model.as_deref(), Some("gpt-5.2"));
+    }
+
+    #[tokio::test]
+    async fn worker_role_overrides_model_when_feature_enabled() {
+        let (_home, mut config) = test_config().await;
+        config.model = Some("gpt-5.2".to_string());
+        config.features.enable(Feature::WorkerModelOverride);
+
+        AgentRole::Worker
+            .apply_to_config(&mut config)
+            .expect("apply worker role");
+
+        assert_eq!(config.model.as_deref(), Some("gpt-5.2-codex"));
     }
 }

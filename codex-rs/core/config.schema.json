@@ -75,6 +75,9 @@
         "apply_patch_freeform": {
           "type": "boolean"
         },
+        "child_agents_md": {
+          "type": "boolean"
+        },
         "collab": {
           "type": "boolean"
         },
@@ -97,9 +100,6 @@
           "type": "boolean"
         },
         "experimental_windows_sandbox": {
-          "type": "boolean"
-        },
-        "child_agents_md": {
           "type": "boolean"
         },
         "include_apply_patch_tool": {
@@ -139,6 +139,9 @@
           "type": "boolean"
         },
         "web_search_request": {
+          "type": "boolean"
+        },
+        "worker_model_override": {
           "type": "boolean"
         }
       },
@@ -543,6 +546,9 @@
             "apply_patch_freeform": {
               "type": "boolean"
             },
+            "child_agents_md": {
+              "type": "boolean"
+            },
             "collab": {
               "type": "boolean"
             },
@@ -565,9 +571,6 @@
               "type": "boolean"
             },
             "experimental_windows_sandbox": {
-              "type": "boolean"
-            },
-            "child_agents_md": {
               "type": "boolean"
             },
             "include_apply_patch_tool": {
@@ -607,6 +610,9 @@
               "type": "boolean"
             },
             "web_search_request": {
+              "type": "boolean"
+            },
+            "worker_model_override": {
               "type": "boolean"
             }
           },
