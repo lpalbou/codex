@@ -333,6 +333,7 @@ pub(crate) struct ChatComposer {
     realtime_conversation_enabled: bool,
     audio_device_selection_enabled: bool,
     windows_degraded_sandbox_active: bool,
+    is_zellij: bool,
     status_line_value: Option<Line<'static>>,
     status_line_enabled: bool,
     // Agent label injected into the footer's contextual row when multi-agent mode is active.
@@ -454,6 +455,7 @@ impl ChatComposer {
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
             windows_degraded_sandbox_active: false,
+            is_zellij: codex_terminal_detection::terminal_info().is_zellij(),
             status_line_value: None,
             status_line_enabled: false,
             active_agent_label: None,
@@ -3672,7 +3674,7 @@ impl ChatComposer {
                 }
             }
         }
-        let is_zellij = codex_terminal_detection::terminal_info().is_zellij();
+        let is_zellij = self.is_zellij;
         let style = user_message_style();
         let textarea_style = style.fg(ratatui::style::Color::Reset);
         Block::default().style(style).render_ref(composer_rect, buf);
@@ -3691,12 +3693,10 @@ impl ChatComposer {
                 } else {
                     "›".bold()
                 }
+            } else if is_zellij {
+                Span::styled("›", style.fg(ratatui::style::Color::DarkGray))
             } else {
-                if is_zellij {
-                    Span::styled("›", style.fg(ratatui::style::Color::DarkGray))
-                } else {
-                    "›".dim()
-                }
+                "›".dim()
             };
             buf.set_span(
                 textarea_rect.x - LIVE_PREFIX_COLS,
@@ -3708,21 +3708,6 @@ impl ChatComposer {
 
         let mut state = self.textarea_state.borrow_mut();
         let textarea_is_empty = self.textarea.text().is_empty();
-        if is_zellij && textarea_is_empty {
-            tracing::info!(
-                ?textarea_rect,
-                input_enabled = self.input_enabled,
-                has_mask_char = mask_char.is_some(),
-                placeholder_text = if self.input_enabled {
-                    self.placeholder_text.as_str()
-                } else {
-                    self.input_disabled_placeholder
-                        .as_deref()
-                        .unwrap_or("Input disabled.")
-                },
-                "zellij empty composer render"
-            );
-        }
         if let Some(mask_char) = mask_char {
             self.textarea.render_ref_masked(
                 textarea_rect,
@@ -3736,10 +3721,8 @@ impl ChatComposer {
                 },
             );
         } else if is_zellij && textarea_is_empty {
-            tracing::info!(?textarea_rect, "zellij empty composer fill branch");
             buf.set_style(textarea_rect, textarea_style);
         } else if is_zellij {
-            tracing::info!(?textarea_rect, "zellij styled textarea branch");
             self.textarea
                 .render_ref_styled(textarea_rect, buf, &mut state, textarea_style);
         } else {
@@ -3985,6 +3968,35 @@ mod tests {
             enhanced_keys_supported,
             setup,
         );
+    }
+
+    fn snapshot_zellij_composer_state<F>(name: &str, setup: F)
+    where
+        F: FnOnce(&mut ChatComposer),
+    {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.is_zellij = true;
+        setup(&mut composer);
+        let footer_props = composer.footer_props();
+        let footer_lines = footer_height(&footer_props);
+        let footer_spacing = ChatComposer::footer_spacing(footer_lines);
+        let height = footer_lines + footer_spacing + 8;
+        let mut terminal = Terminal::new(TestBackend::new(100, height)).unwrap();
+        terminal
+            .draw(|f| composer.render(f.area(), f.buffer_mut()))
+            .unwrap();
+        insta::assert_snapshot!(name, terminal.backend());
     }
 
     #[test]
@@ -4313,6 +4325,11 @@ mod tests {
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
             },
         );
+    }
+
+    #[test]
+    fn zellij_empty_composer_snapshot() {
+        snapshot_zellij_composer_state("zellij_empty_composer", |_composer| {});
     }
 
     #[test]

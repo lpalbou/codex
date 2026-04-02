@@ -267,19 +267,7 @@ pub fn user_agent() -> String {
 /// Returns structured terminal metadata for the current process.
 pub fn terminal_info() -> TerminalInfo {
     TERMINAL_INFO
-        .get_or_init(|| {
-            let info = detect_terminal_info_from_env(&ProcessEnvironment);
-            tracing::info!(
-                name = ?info.name,
-                term_program = ?info.term_program,
-                version = ?info.version,
-                term = ?info.term,
-                multiplexer = ?info.multiplexer,
-                is_zellij = info.is_zellij(),
-                "detected terminal info"
-            );
-            info
-        })
+        .get_or_init(|| detect_terminal_info_from_env(&ProcessEnvironment))
         .clone()
 }
 

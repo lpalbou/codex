@@ -525,7 +525,6 @@ impl Tui {
             }
 
             if needs_full_repaint {
-                tracing::info!("invalidating viewport after direct zellij terminal mutation");
                 terminal.invalidate_viewport();
             }
 

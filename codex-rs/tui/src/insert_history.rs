@@ -791,4 +791,26 @@ mod tests {
             "expected URL content to appear immediately after prompt (allowing at most one spacer row), got prompt_row={prompt_row}, url_row={url_row}, rows={rows:?}",
         );
     }
+
+    #[test]
+    fn vt100_zellij_mode_inserts_history_and_updates_viewport() {
+        let width: u16 = 32;
+        let height: u16 = 8;
+        let backend = VT100Backend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        let viewport = Rect::new(0, 4, width, 2);
+        term.set_viewport_area(viewport);
+
+        let line: Line<'static> = Line::from("zellij history");
+        insert_history_lines_with_mode(&mut term, vec![line], InsertHistoryMode::Zellij)
+            .expect("insert zellij history");
+
+        let rows: Vec<String> = term.backend().vt100().screen().rows(0, width).collect();
+        assert!(
+            rows.iter().any(|row| row.contains("zellij history")),
+            "expected zellij history row in screen output, rows: {rows:?}"
+        );
+        assert_eq!(term.viewport_area, Rect::new(0, 5, width, 2));
+        assert_eq!(term.visible_history_rows(), 1);
+    }
 }
