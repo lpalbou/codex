@@ -106,7 +106,7 @@ fn gpt_52_codex() -> ModelPreset {
                 "Extra high reasoning depth for complex problems",
             ),
         ],
-        is_default: true,
+        is_default: false,
         upgrade: None,
         show_in_picker: true,
         supported_in_api: true,
@@ -177,7 +177,7 @@ fn gpt_5_2() -> ModelPreset {
         description:
             "Latest frontier model with improvements across knowledge, reasoning and coding"
                 .to_string(),
-        default_reasoning_effort: ReasoningEffort::Medium,
+        default_reasoning_effort: ReasoningEffort::XHigh,
         supported_reasoning_efforts: vec![
             effort(
                 ReasoningEffort::Low,
@@ -196,7 +196,7 @@ fn gpt_5_2() -> ModelPreset {
                 "Extra high reasoning depth for complex problems",
             ),
         ],
-        is_default: false,
+        is_default: true,
         upgrade: Some(gpt52_codex_upgrade()),
         show_in_picker: true,
         supported_in_api: true,

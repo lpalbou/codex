@@ -36,7 +36,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                     description: "Extra high reasoning depth for complex problems".to_string(),
                 },
             ],
-            is_default: true,
+            is_default: false,
             upgrade: None,
             show_in_picker: true,
             supported_in_api: true,
@@ -97,7 +97,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             model: "gpt-5.2".to_string(),
             display_name: "gpt-5.2".to_string(),
             description: "Latest frontier model with improvements across knowledge, reasoning and coding".to_string(),
-            default_reasoning_effort: ReasoningEffort::Medium,
+            default_reasoning_effort: ReasoningEffort::XHigh,
             supported_reasoning_efforts: vec![
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::Low,
@@ -116,7 +116,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                     description: "Extra high reasoning depth for complex problems".to_string(),
                 },
             ],
-            is_default: false,
+            is_default: true,
             upgrade: Some(gpt_52_codex_upgrade()),
             show_in_picker: true,
             supported_in_api: true,

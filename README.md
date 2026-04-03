@@ -1,59 +1,145 @@
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
-<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
-<p align="center">
-  <img src="./.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
-</p>
-</br>
-If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE.</a>
-</br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, go to <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>.</p>
+# Open Codex Unleashed
 
----
+**Open Codex Unleashed** is a personal fork of OpenAI’s open-source **Codex CLI** (based on
+`rust-v0.87.0`), maintained by **Laurent-Philippe Albou**.
 
-## Quickstart
+Fork URL: https://github.com/lpalbou/codex  
+Fork start date: 2026-04-03
 
-### Installing and running Codex CLI
+## Why this fork exists
 
-Install globally with your preferred package manager:
+This fork advocates for **depth over speed**: I would rather wait 1h+ for a single, careful,
+agentic orchestration than supervise 10 fast iterations full of mistakes.
 
-```shell
-# Install using npm
-npm install -g @openai/codex
+Slower runs also make the system easier to observe (I can follow what’s happening in real time),
+and reduce the “tsunami” of trial-and-error text that comes from rapid, shallow retries.
+
+## What’s different (high level)
+
+This fork focuses on:
+
+- **Predictable model selection**: fresh installs default to **`gpt-5.2`** with
+  **`model_reasoning_effort = "xhigh"`** (for Responses-based providers).
+- **Consistent sub-agent routing**: prevents “worker” sub-agents from silently overriding the
+  parent model (upstream hard-coded `gpt-5.2-codex` behavior can be re-enabled via feature flag).
+- **Observability**: adds a `/agents` TUI overlay with live sub-agent status, task, approvals, and
+  context-window usage.
+- **Auditability**: adds a `/save` slash command to export the **full** chat history to Markdown
+  (including tool calls/results).
+
+More details: `CHANGELOG.md` and `docs/lpalbou-fork.md`.
+
+## Install (from source)
+
+Prereqs:
+
+- Rust toolchain (stable) + Cargo
+- `just` (https://github.com/casey/just)
+
+Steps:
+
+```sh
+git clone https://github.com/lpalbou/codex.git
+cd codex
 ```
 
-```shell
-# Install using Homebrew
-brew install --cask codex
+Build and install the `codex` binary into `~/.cargo/bin`:
+
+```sh
+cargo install --path codex-rs/cli --bin codex --locked --force
 ```
 
-Then simply run `codex` to get started.
+Run:
 
-<details>
-<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
+```sh
+codex
+```
 
-Each GitHub Release contains many executables, but in practice, you likely want one of these:
+If you’re developing from source (no install), run:
 
-- macOS
-  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
-- Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
+```sh
+just codex
+```
 
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
+## Default model + reasoning
 
-</details>
+On a fresh install, this fork defaults to:
 
-### Using Codex with your ChatGPT plan
+- model: `gpt-5.2`
+- reasoning effort: `xhigh` (Responses-based providers)
 
-Run `codex` and select **Sign in with ChatGPT**. We recommend signing into your ChatGPT account to use Codex as part of your Plus, Pro, Team, Edu, or Enterprise plan. [Learn more about what's included in your ChatGPT plan](https://help.openai.com/en/articles/11369540-codex-in-chatgpt).
+You can change it at runtime with `/model`, or persist it in `~/.codex/config.toml`:
 
-You can also use Codex with an API key, but this requires [additional setup](https://developers.openai.com/codex/auth#sign-in-with-an-api-key).
+```toml
+model = "gpt-5.2"
+model_reasoning_effort = "xhigh"
+```
 
-## Docs
+## Using local models (LM Studio / Ollama)
 
-- [**Codex Documentation**](https://developers.openai.com/codex)
-- [**Contributing**](./docs/contributing.md)
-- [**Installing & building**](./docs/install.md)
-- [**Open source fund**](./docs/open-source-fund.md)
+This fork includes built-in “OSS” providers:
 
-This repository is licensed under the [Apache-2.0 License](LICENSE).
+- `lmstudio` (wire API: Responses)
+- `ollama` (wire API: Responses)
+- `ollama-chat` (wire API: Chat Completions)
+
+### Pointing Codex at a custom server URL
+
+The built-in OSS providers read the base URL from environment variables:
+
+- `CODEX_OSS_BASE_URL` (recommended): full base URL, e.g. `http://localhost:11434/v1`
+- `CODEX_OSS_PORT`: convenience port override when `CODEX_OSS_BASE_URL` is unset
+
+Example:
+
+```sh
+export CODEX_OSS_BASE_URL="http://localhost:11434/v1"
+```
+
+### Example: Ollama (Chat Completions)
+
+1) Start Ollama (and ensure your model is available).
+2) Point Codex at Ollama’s OpenAI-compatible endpoint:
+
+```sh
+export CODEX_OSS_BASE_URL="http://localhost:11434/v1"
+```
+
+3) Set provider + model in `~/.codex/config.toml`:
+
+```toml
+model_provider = "ollama-chat"
+model = "qwen2.5-coder:7b" # example
+```
+
+4) Run `codex`.
+
+### Example: LM Studio (Responses API)
+
+1) Start the LM Studio local server in “OpenAI compatible” mode.
+2) Point Codex at the server:
+
+```sh
+export CODEX_OSS_BASE_URL="http://localhost:1234/v1"
+```
+
+3) Set provider + model in `~/.codex/config.toml`:
+
+```toml
+model_provider = "lmstudio"
+model = "your-model-id" # replace with the model name exposed by the server
+```
+
+4) Run `codex`.
+
+> Note: `lmstudio` and `ollama` use the **Responses** wire API (`/v1/responses`). If your server
+> only supports Chat Completions (`/v1/chat/completions`), prefer `ollama-chat` or add your own
+> provider entry.
+
+## Credits / upstream
+
+- Upstream project: OpenAI Codex CLI — https://github.com/openai/codex
+- Docs: https://developers.openai.com/codex
+
+This repository remains licensed under the [Apache-2.0 License](LICENSE). This fork is not
+affiliated with OpenAI.

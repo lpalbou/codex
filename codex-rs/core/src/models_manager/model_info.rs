@@ -244,7 +244,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             default_verbosity: Some(Verbosity::Low),
             base_instructions: GPT_5_2_INSTRUCTIONS.to_string(),
             default_reasoning_level: Some(ReasoningEffort::Medium),
-            truncation_policy: TruncationPolicyConfig::bytes(10_000),
+            truncation_policy: TruncationPolicyConfig::tokens(10_000),
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: true,
             context_window: Some(CONTEXT_WINDOW_272K),

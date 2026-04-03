@@ -32,10 +32,16 @@ use crate::tooltips;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
+use crate::version::FORK_AUTHOR;
+use crate::version::FORK_NAME;
+use crate::version::FORK_URL;
+use crate::version::FORK_VERSION;
+use crate::version::UPSTREAM_NAME;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
 use base64::Engine;
+use chrono::Local;
 use codex_common::format_env_display::format_env_display;
 use codex_core::config::Config;
 use codex_core::config::types::McpServerTransportConfig;
@@ -828,7 +834,7 @@ pub(crate) fn new_session_info(
         model.clone(),
         reasoning_effort,
         config.cwd.clone(),
-        CODEX_CLI_VERSION,
+        FORK_VERSION,
     );
     let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
 
@@ -897,6 +903,7 @@ pub(crate) struct SessionHeaderHistoryCell {
     model_style: Style,
     reasoning_effort: Option<ReasoningEffortConfig>,
     directory: PathBuf,
+    startup_date: String,
 }
 
 impl SessionHeaderHistoryCell {
@@ -928,6 +935,7 @@ impl SessionHeaderHistoryCell {
             model_style,
             reasoning_effort,
             directory,
+            startup_date: Local::now().format("%Y-%m-%d").to_string(),
         }
     }
 
@@ -977,14 +985,28 @@ impl HistoryCell for SessionHeaderHistoryCell {
         };
 
         let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
+        let wrap_dim = |text: String| -> Vec<Line<'static>> {
+            let wrap_width = inner_width.max(1);
+            textwrap::wrap(text.as_str(), wrap_width)
+                .into_iter()
+                .map(|line| make_row(vec![line.to_string().dim()]))
+                .collect()
+        };
 
-        // Title line rendered inside the box: ">_ OpenAI Codex (vX)"
+        // Title line rendered inside the box: ">_ Open Codex Unleashed (vX)"
         let title_spans: Vec<Span<'static>> = vec![
             Span::from(">_ ").dim(),
-            Span::from("OpenAI Codex").bold(),
+            Span::from(FORK_NAME).bold(),
             Span::from(" ").dim(),
             Span::from(format!("(v{})", self.version)).dim(),
         ];
+
+        let fork_line = format!("Fork of {UPSTREAM_NAME} v{CODEX_CLI_VERSION} by {FORK_AUTHOR}.");
+        let purpose_line =
+            "Controls model, reasoning, agent spawning, and /save exports.".to_string();
+        let source_spans: Vec<Span<'static>> =
+            vec!["source: ".dim(), Span::from(FORK_URL).cyan().underlined()];
+        let date_line = format!("date: {}", self.startup_date);
 
         const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
         const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
@@ -1015,12 +1037,16 @@ impl HistoryCell for SessionHeaderHistoryCell {
         let dir = self.format_directory(Some(dir_max_width));
         let dir_spans = vec![Span::from(dir_prefix).dim(), Span::from(dir)];
 
-        let lines = vec![
-            make_row(title_spans),
-            make_row(Vec::new()),
-            make_row(model_spans),
-            make_row(dir_spans),
-        ];
+        let mut lines = Vec::new();
+        lines.push(make_row(title_spans));
+        lines.push(make_row(Vec::new()));
+        lines.extend(wrap_dim(fork_line));
+        lines.extend(wrap_dim(purpose_line));
+        lines.push(make_row(source_spans));
+        lines.push(make_row(vec![date_line.dim()]));
+        lines.push(make_row(Vec::new()));
+        lines.push(make_row(model_spans));
+        lines.push(make_row(dir_spans));
 
         with_border(lines)
     }

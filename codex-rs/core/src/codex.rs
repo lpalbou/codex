@@ -224,7 +224,7 @@ fn maybe_push_chat_wire_api_deprecation(
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     pub(crate) async fn spawn(
-        config: Config,
+        mut config: Config,
         auth_manager: Arc<AuthManager>,
         models_manager: Arc<ModelsManager>,
         skills_manager: Arc<SkillsManager>,
@@ -256,7 +256,6 @@ impl Codex {
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?;
 
-        let config = Arc::new(config);
         let _ = models_manager
             .list_models(
                 &config,
@@ -270,6 +269,18 @@ impl Codex {
                 crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
             )
             .await;
+
+        if config.model_reasoning_effort.is_none()
+            && matches!(
+                config.model_provider.wire_api,
+                WireApi::Responses | WireApi::ResponsesWebsocket
+            )
+            && model == "gpt-5.2"
+        {
+            config.model_reasoning_effort = Some(ReasoningEffortConfig::XHigh);
+        }
+
+        let config = Arc::new(config);
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             model: model.clone(),

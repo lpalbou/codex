@@ -543,16 +543,16 @@ fn render_dashboard_lines(
         .count();
 
     let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from(vec![
-        "Agents: ".bold(),
-        format!("{}", snapshot.agents.len()).bold(),
-        "  ".into(),
-        format!("{spawned_count} spawned").dim(),
-        "  ".into(),
-        counts.summary_line(),
-        "  ".into(),
-        format!("updated {}", snapshot.captured_at.format("%H:%M:%S")).dim(),
-    ]));
+    let mut header_spans: Vec<ratatui::text::Span<'static>> = Vec::new();
+    header_spans.push("Agents: ".bold());
+    header_spans.push(format!("{}", snapshot.agents.len()).bold());
+    header_spans.push("  ".into());
+    header_spans.push(format!("{spawned_count} spawned").dim());
+    header_spans.push("  ".into());
+    header_spans.extend(counts.summary_spans());
+    header_spans.push("  ".into());
+    header_spans.push(format!("updated {}", snapshot.captured_at.format("%H:%M:%S")).dim());
+    lines.push(Line::from(header_spans));
     lines.push(Line::from(""));
 
     if snapshot.agents.is_empty() {
@@ -617,37 +617,45 @@ impl AgentCounts {
         }
     }
 
-    fn summary_line(&self) -> ratatui::text::Span<'static> {
-        let mut parts: Vec<String> = Vec::new();
+    fn summary_spans(&self) -> Vec<ratatui::text::Span<'static>> {
+        let mut parts: Vec<ratatui::text::Span<'static>> = Vec::new();
+        let mut push = |span: ratatui::text::Span<'static>| {
+            if !parts.is_empty() {
+                parts.push(", ".dim());
+            }
+            parts.push(span);
+        };
+
         if self.running > 0 {
-            parts.push(format!("{} running", self.running));
+            push(format!("{} running", self.running).green());
         }
         if self.pending > 0 {
-            parts.push(format!("{} pending", self.pending));
+            push(format!("{} pending", self.pending).cyan());
         }
         if self.completed > 0 {
-            parts.push(format!("{} done", self.completed));
+            push(format!("{} done", self.completed).cyan());
         }
         if self.errored > 0 {
-            parts.push(format!("{} error", self.errored));
+            push(format!("{} error", self.errored).red());
         }
         if self.shutdown > 0 {
-            parts.push(format!("{} shutdown", self.shutdown));
+            push(format!("{} shutdown", self.shutdown).dim());
         }
         if self.not_found > 0 {
-            parts.push(format!("{} missing", self.not_found));
+            push(format!("{} missing", self.not_found).dim());
         }
+
         if parts.is_empty() {
-            return "idle".dim();
+            return vec!["idle".dim()];
         }
-        parts.join(", ").dim()
+        parts
     }
 }
 
 fn render_agent_block(agent: &AgentSnapshot) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let status_span = match &agent.status {
-        AgentStatus::PendingInit => "pending".dim(),
+        AgentStatus::PendingInit => "pending".cyan(),
         AgentStatus::Running => "running".green(),
         AgentStatus::Completed(_) => "done".cyan(),
         AgentStatus::Errored(_) => "error".red(),
@@ -672,11 +680,16 @@ fn render_agent_block(agent: &AgentSnapshot) -> Vec<Line<'static>> {
             .reasoning_effort
             .map(format_reasoning_effort)
             .unwrap_or_else(|| "default".to_string());
-        lines.push(Line::from(format!("  model: {model} ({effort})").dim()));
+        lines.push(Line::from(vec![
+            "  model: ".dim(),
+            model.to_string().bold(),
+            " ".into(),
+            format!("({effort})").dim(),
+        ]));
     }
 
     if let Some(task) = agent.task.as_deref() {
-        lines.push(Line::from(format!("  task: {task}").dim()));
+        lines.push(Line::from(vec!["  task: ".dim(), task.to_string().into()]));
     }
 
     if let Some(ctx) = render_context_window_line(agent) {
@@ -684,33 +697,79 @@ fn render_agent_block(agent: &AgentSnapshot) -> Vec<Line<'static>> {
     }
 
     if agent.waiting_for_approval {
-        lines.push(Line::from("  approvals: waiting".cyan().dim()));
+        lines.push(Line::from(vec![
+            "  approvals: ".dim(),
+            "waiting".cyan().bold(),
+        ]));
     }
 
     if let Some(action) = agent.last_action.as_deref() {
-        lines.push(Line::from(
-            format!("  doing: {}", preview_message(action)).dim(),
-        ));
+        let action = preview_message(action);
+        let action = action.trim();
+        let mut spans: Vec<ratatui::text::Span<'static>> = vec!["  doing: ".dim()];
+
+        if let Some(rest) = action.strip_prefix("shell:") {
+            spans.push("shell".cyan().bold());
+            spans.push(":".dim());
+            spans.push(rest.to_string().into());
+        } else if let Some(rest) = action.strip_prefix("mcp:") {
+            spans.push("mcp".magenta().bold());
+            spans.push(":".dim());
+            spans.push(rest.to_string().into());
+        } else if let Some(rest) = action.strip_prefix("apply_patch:") {
+            if rest.contains("(ok)") {
+                spans.push("apply_patch".green().bold());
+            } else if rest.contains("(error)") {
+                spans.push("apply_patch".red().bold());
+            } else {
+                spans.push("apply_patch".cyan().bold());
+            }
+            spans.push(":".dim());
+            spans.push(rest.to_string().into());
+        } else if let Some(rest) = action.strip_prefix("web_search:") {
+            spans.push("web_search".cyan().bold());
+            spans.push(":".dim());
+            spans.push(rest.to_string().into());
+        } else {
+            spans.push(action.to_string().into());
+        }
+
+        lines.push(Line::from(spans));
     }
 
     if let Some(message) = agent.last_user_message.as_deref() {
-        lines.push(Line::from(format!("  last user: {message}").dim()));
+        lines.push(Line::from(vec![
+            "  last user: ".dim(),
+            message.to_string().into(),
+        ]));
     }
 
     if let Some(message) = agent.last_agent_message.as_deref() {
-        lines.push(Line::from(format!("  last assistant: {message}").dim()));
+        lines.push(Line::from(vec![
+            "  last assistant: ".dim(),
+            message.to_string().into(),
+        ]));
     }
 
     if let Some(message) = agent.last_warning.as_deref() {
-        lines.push(Line::from(format!("  warning: {message}").cyan().dim()));
+        lines.push(Line::from(vec![
+            "  warning: ".dim(),
+            message.to_string().cyan(),
+        ]));
     }
 
     if let Some(message) = agent.last_error.as_deref() {
-        lines.push(Line::from(format!("  error: {message}").red().dim()));
+        lines.push(Line::from(vec![
+            "  error: ".dim(),
+            message.to_string().red(),
+        ]));
     }
 
     if let Some(path) = agent.rollout_path.as_ref() {
-        lines.push(Line::from(format!("  rollout: {}", path.display()).dim()));
+        lines.push(Line::from(vec![
+            "  rollout: ".dim(),
+            path.display().to_string().dim(),
+        ]));
     }
 
     lines.push(
@@ -744,14 +803,24 @@ fn render_context_window_line(agent: &AgentSnapshot) -> Option<Line<'static>> {
     let usage = &info.last_token_usage;
     let used = usage.tokens_in_context_window();
     let left = usage.percent_of_context_window_remaining(window);
-    Some(
-        Line::from(format!(
-            "  context: {left}% left ({} used / {})",
+    let left_span: ratatui::text::Span<'static> = if left <= 10 {
+        format!("{left}%").red()
+    } else if left <= 25 {
+        format!("{left}%").cyan()
+    } else {
+        format!("{left}%").green()
+    };
+    Some(Line::from(vec![
+        "  context: ".dim(),
+        left_span,
+        " left ".dim(),
+        format!(
+            "({} used / {})",
             format_tokens_compact(used),
             format_tokens_compact(window),
-        ))
+        )
         .dim(),
-    )
+    ]))
 }
 
 fn format_reasoning_effort(effort: ReasoningEffortConfig) -> String {

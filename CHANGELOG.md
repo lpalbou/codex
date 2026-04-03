@@ -18,6 +18,8 @@ spawned sub-agents.
 
 ### Unreleased
 
+- Default fresh-install model selection to `gpt-5.2` and default reasoning effort to `xhigh`
+  (Responses-based providers).
 - Add feature flag `worker_model_override` (default: `false`) to prevent `agent_type=worker`
   sub-agents from overriding the parent model to `gpt-5.2-codex`.
   - Enable to restore upstream behavior: `codex --enable worker_model_override`

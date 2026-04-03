@@ -29,9 +29,8 @@ use crate::models_manager::model_presets::builtin_model_presets;
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
-const OPENAI_DEFAULT_API_MODEL: &str = "gpt-5.2-codex";
-const OPENAI_DEFAULT_CHATGPT_MODEL: &str = "gpt-5.2-codex";
-const CODEX_AUTO_BALANCED_MODEL: &str = "codex-auto-balanced";
+const OPENAI_DEFAULT_API_MODEL: &str = "gpt-5.2";
+const OPENAI_DEFAULT_CHATGPT_MODEL: &str = "gpt-5.2";
 
 /// Strategy for refreshing available models.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,7 +101,7 @@ impl ModelsManager {
     /// Get the model identifier to use, refreshing according to the specified strategy.
     ///
     /// If `model` is provided, returns it directly. Otherwise selects the default based on
-    /// auth mode and available models (prefers `codex-auto-balanced` for ChatGPT auth).
+    /// auth mode.
     pub async fn get_default_model(
         &self,
         model: &Option<String>,
@@ -118,17 +117,8 @@ impl ModelsManager {
         {
             error!("failed to refresh available models: {err}");
         }
-        // if codex-auto-balanced exists & signed in with chatgpt mode, return it, otherwise return the default model
         let auth_mode = self.auth_manager.get_auth_mode();
-        let remote_models = self.get_remote_models(config).await;
         if auth_mode == Some(AuthMode::ChatGPT) {
-            let has_auto_balanced = self
-                .build_available_models(remote_models)
-                .iter()
-                .any(|model| model.model == CODEX_AUTO_BALANCED_MODEL && model.show_in_picker);
-            if has_auto_balanced {
-                return CODEX_AUTO_BALANCED_MODEL.to_string();
-            }
             return OPENAI_DEFAULT_CHATGPT_MODEL.to_string();
         }
         OPENAI_DEFAULT_API_MODEL.to_string()
