@@ -12,10 +12,14 @@ use codex_protocol::openai_models::ReasoningEffort;
 use ratatui::text::Line;
 
 use crate::history_cell::AgentMessageCell;
+use crate::history_cell::FinalMessageSeparator;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PatchHistoryCell;
+use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::PlanUpdateCell;
+use crate::history_cell::PrefixedWrappedHistoryCell;
+use crate::history_cell::ReasoningSummaryCell;
 use crate::history_cell::SessionHeaderHistoryCell;
 use crate::history_cell::UnifiedExecInteractionCell;
 use crate::history_cell::UserHistoryCell;
@@ -27,6 +31,38 @@ pub(crate) struct SaveTranscriptMetadata {
     pub(crate) model: Option<String>,
     pub(crate) reasoning_effort: Option<ReasoningEffort>,
     pub(crate) cwd: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SaveTranscriptMode {
+    /// Save only the conversation narrative: user, assistant, plan updates,
+    /// and reasoning summaries.
+    Compact,
+    /// Save the full UI transcript, including tool calls/results and other
+    /// non-chat events.
+    Full,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SaveTranscriptArgs {
+    pub(crate) filename: Option<String>,
+    pub(crate) mode: SaveTranscriptMode,
+}
+
+pub(crate) fn parse_save_transcript_args(args: &str) -> SaveTranscriptArgs {
+    let mut mode = SaveTranscriptMode::Compact;
+    let mut parts: Vec<&str> = args.split_whitespace().collect();
+    parts.retain(|part| {
+        if *part == "--full" {
+            mode = SaveTranscriptMode::Full;
+            false
+        } else {
+            true
+        }
+    });
+
+    let filename = (!parts.is_empty()).then(|| parts.join(" "));
+    SaveTranscriptArgs { filename, mode }
 }
 
 pub(crate) fn default_transcript_filename(saved_at: DateTime<Local>) -> String {
@@ -46,7 +82,10 @@ pub(crate) fn export_chat_history_markdown(
     transcript_cells: &[Arc<dyn HistoryCell>],
     active_cell_lines: Option<Vec<Line<'static>>>,
     metadata: &SaveTranscriptMetadata,
+    mode: SaveTranscriptMode,
 ) -> String {
+    const EXPORT_WIDTH: u16 = 160;
+
     let mut output = String::new();
     output.push_str("# Codex chat history\n\n");
 
@@ -67,22 +106,18 @@ pub(crate) fn export_chat_history_markdown(
 
     output.push_str("## History\n\n");
 
-    let mut entry_index: usize = 0;
-    for cell in transcript_cells {
-        let lines = cell.transcript_lines(u16::MAX);
-        if lines.is_empty() {
+    let entries = export_entries(transcript_cells, mode, EXPORT_WIDTH);
+    let mut entry_index = 0usize;
+    for entry in entries {
+        if entry.content.trim().is_empty() {
             continue;
         }
         entry_index += 1;
-        write_entry_markdown(
-            &mut output,
-            entry_index,
-            history_cell_title(cell.as_ref()),
-            &lines_to_plain_text(&lines),
-        );
+        write_entry_markdown(&mut output, entry_index, entry.title, &entry.content);
     }
 
-    if let Some(lines) = active_cell_lines
+    if mode == SaveTranscriptMode::Full
+        && let Some(lines) = active_cell_lines
         && !lines.is_empty()
     {
         entry_index += 1;
@@ -90,7 +125,7 @@ pub(crate) fn export_chat_history_markdown(
             &mut output,
             entry_index,
             "In-progress output",
-            &lines_to_plain_text(&lines),
+            &lines_to_plain_text_with_prefix_stripping(&lines, ExportEntryKind::Event),
         );
     }
 
@@ -112,42 +147,235 @@ pub(crate) fn write_transcript_markdown(path: &Path, markdown: &str) -> io::Resu
     file.flush()
 }
 
-fn history_cell_title(cell: &dyn HistoryCell) -> &'static str {
-    let any = cell.as_any();
-    if any.is::<SessionHeaderHistoryCell>() {
-        "Session"
-    } else if any.is::<UserHistoryCell>() {
-        "User"
-    } else if any.is::<AgentMessageCell>() {
-        "Assistant"
-    } else if any.is::<UnifiedExecInteractionCell>() {
-        "Shell"
-    } else if any.is::<PatchHistoryCell>() {
-        "Patch"
-    } else if any.is::<McpToolCallCell>() {
-        "MCP tool"
-    } else if any.is::<PlanUpdateCell>() {
-        "Plan"
-    } else {
-        "Event"
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExportEntryKind {
+    Session,
+    User,
+    Assistant,
+    Thought,
+    Plan,
+    Shell,
+    Patch,
+    McpTool,
+    Warning,
+    Separator,
+    Event,
+}
+
+#[derive(Debug, Clone)]
+struct ExportEntry {
+    kind: ExportEntryKind,
+    title: &'static str,
+    content: String,
+}
+
+fn export_entries(
+    transcript_cells: &[Arc<dyn HistoryCell>],
+    mode: SaveTranscriptMode,
+    width: u16,
+) -> Vec<ExportEntry> {
+    let mut out: Vec<ExportEntry> = Vec::new();
+
+    for cell in transcript_cells {
+        let kind = history_cell_kind(cell.as_ref());
+        if mode == SaveTranscriptMode::Compact && !kind_in_compact_export(kind, cell.as_ref()) {
+            continue;
+        }
+
+        let lines = cell.transcript_lines(width);
+        if lines.is_empty() {
+            continue;
+        }
+
+        let mut content = lines_to_plain_text_with_prefix_stripping(&lines, kind);
+        if content.trim().is_empty() {
+            if let Some(prev) = out.last_mut()
+                && should_merge_with_previous(prev.kind, kind, cell.as_ref())
+            {
+                prev.content.push('\n');
+            }
+            continue;
+        }
+
+        if let Some(prev) = out.last_mut()
+            && should_merge_with_previous(prev.kind, kind, cell.as_ref())
+        {
+            if !prev.content.ends_with('\n') {
+                prev.content.push('\n');
+            }
+            prev.content.push_str(content.trim_end_matches('\n'));
+            prev.content.push('\n');
+            continue;
+        }
+
+        content = content.trim_end_matches('\n').to_string();
+        content.push('\n');
+
+        out.push(ExportEntry {
+            kind,
+            title: export_entry_title(kind),
+            content,
+        });
+    }
+
+    out
+}
+
+fn export_entry_title(kind: ExportEntryKind) -> &'static str {
+    match kind {
+        ExportEntryKind::Session => "Session",
+        ExportEntryKind::User => "User",
+        ExportEntryKind::Assistant => "Assistant",
+        ExportEntryKind::Thought => "Thought",
+        ExportEntryKind::Plan => "Plan",
+        ExportEntryKind::Shell => "Shell",
+        ExportEntryKind::Patch => "Patch",
+        ExportEntryKind::McpTool => "MCP tool",
+        ExportEntryKind::Warning => "Warning",
+        ExportEntryKind::Separator => "Separator",
+        ExportEntryKind::Event => "Event",
     }
 }
 
-fn lines_to_plain_text(lines: &[Line<'static>]) -> String {
+fn kind_in_compact_export(kind: ExportEntryKind, cell: &dyn HistoryCell) -> bool {
+    match kind {
+        ExportEntryKind::User
+        | ExportEntryKind::Assistant
+        | ExportEntryKind::Thought
+        | ExportEntryKind::Plan
+        | ExportEntryKind::Warning => true,
+        ExportEntryKind::Event => is_error_event(cell),
+        ExportEntryKind::Session
+        | ExportEntryKind::Shell
+        | ExportEntryKind::Patch
+        | ExportEntryKind::McpTool
+        | ExportEntryKind::Separator => false,
+    }
+}
+
+fn is_error_event(cell: &dyn HistoryCell) -> bool {
+    let any = cell.as_any();
+    if let Some(cell) = any.downcast_ref::<PlainHistoryCell>()
+        && let Some(line) = cell.display_lines(80).first()
+    {
+        let text = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        return text.trim_start().starts_with('■');
+    }
+    false
+}
+
+fn should_merge_with_previous(
+    previous: ExportEntryKind,
+    current: ExportEntryKind,
+    current_cell: &dyn HistoryCell,
+) -> bool {
+    if previous != current {
+        return false;
+    }
+
+    match current {
+        ExportEntryKind::Assistant => current_cell.is_stream_continuation(),
+        _ => false,
+    }
+}
+
+fn history_cell_kind(cell: &dyn HistoryCell) -> ExportEntryKind {
+    let any = cell.as_any();
+    if any.is::<SessionHeaderHistoryCell>() {
+        ExportEntryKind::Session
+    } else if any.is::<UserHistoryCell>() {
+        ExportEntryKind::User
+    } else if any.is::<AgentMessageCell>() {
+        ExportEntryKind::Assistant
+    } else if any.is::<ReasoningSummaryCell>() {
+        ExportEntryKind::Thought
+    } else if any.is::<UnifiedExecInteractionCell>() || any.is::<crate::exec_cell::ExecCell>() {
+        ExportEntryKind::Shell
+    } else if any.is::<PatchHistoryCell>() {
+        ExportEntryKind::Patch
+    } else if any.is::<McpToolCallCell>() {
+        ExportEntryKind::McpTool
+    } else if any.is::<PlanUpdateCell>() {
+        ExportEntryKind::Plan
+    } else if any.is::<PrefixedWrappedHistoryCell>() {
+        ExportEntryKind::Warning
+    } else if any.is::<FinalMessageSeparator>() {
+        ExportEntryKind::Separator
+    } else {
+        ExportEntryKind::Event
+    }
+}
+
+fn lines_to_plain_text_with_prefix_stripping(
+    lines: &[Line<'static>],
+    kind: ExportEntryKind,
+) -> String {
     let mut output = String::new();
     for (idx, line) in lines.iter().enumerate() {
+        let mut text = line
+            .spans
+            .iter()
+            .map(|sp| sp.content.as_ref())
+            .collect::<String>();
+
+        if matches!(
+            kind,
+            ExportEntryKind::Assistant | ExportEntryKind::Thought | ExportEntryKind::User
+        ) {
+            text = strip_line_prefix(text, kind);
+        }
+
         if idx > 0 {
             output.push('\n');
         }
-        output.push_str(
-            &line
-                .spans
-                .iter()
-                .map(|sp| sp.content.as_ref())
-                .collect::<String>(),
-        );
+        output.push_str(&text);
     }
-    output
+
+    strip_leading_and_trailing_blank_lines(output)
+}
+
+fn strip_line_prefix(mut line: String, kind: ExportEntryKind) -> String {
+    let prefix = match kind {
+        ExportEntryKind::User => {
+            if line.starts_with("› ") {
+                Some("› ")
+            } else if line.starts_with("  ") {
+                Some("  ")
+            } else {
+                None
+            }
+        }
+        ExportEntryKind::Assistant | ExportEntryKind::Thought => {
+            if line.starts_with("• ") {
+                Some("• ")
+            } else if line.starts_with("  ") {
+                Some("  ")
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+
+    if let Some(prefix) = prefix {
+        line = line.strip_prefix(prefix).unwrap_or(&line).to_string();
+    }
+    line
+}
+
+fn strip_leading_and_trailing_blank_lines(text: String) -> String {
+    let mut lines: Vec<&str> = text.lines().collect();
+    while !lines.is_empty() && lines[0].trim().is_empty() {
+        lines.remove(0);
+    }
+    while !lines.is_empty() && lines[lines.len() - 1].trim().is_empty() {
+        lines.pop();
+    }
+    lines.join("\n")
 }
 
 fn write_entry_markdown(output: &mut String, index: usize, title: &str, content: &str) {

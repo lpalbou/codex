@@ -2105,8 +2105,10 @@ impl ChatWidget {
                 self.add_status_output();
             }
             SlashCommand::Save => {
-                self.app_event_tx
-                    .send(AppEvent::SaveTranscript { filename: None });
+                self.app_event_tx.send(AppEvent::SaveTranscript {
+                    filename: None,
+                    mode: crate::save_transcript::SaveTranscriptMode::Compact,
+                });
             }
             SlashCommand::Agents => {
                 self.app_event_tx.send(AppEvent::OpenAgentsOverlay);
@@ -2192,9 +2194,11 @@ impl ChatWidget {
                 });
             }
             SlashCommand::Save => {
-                let filename = (!trimmed.is_empty()).then_some(trimmed.to_string());
-                self.app_event_tx
-                    .send(AppEvent::SaveTranscript { filename });
+                let parsed = crate::save_transcript::parse_save_transcript_args(trimmed);
+                self.app_event_tx.send(AppEvent::SaveTranscript {
+                    filename: parsed.filename,
+                    mode: parsed.mode,
+                });
             }
             _ => self.dispatch_command(cmd),
         }

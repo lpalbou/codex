@@ -25,7 +25,8 @@ spawned sub-agents.
   - Enable to restore upstream behavior: `codex --enable worker_model_override`
 - Add `/agents` TUI overlay for live sub-agent observability (status, last action, approvals, and
   context-window usage).
-- Add `/save` slash command to export the full chat history to a markdown file.
+- Add `/save` slash command to export chat history to Markdown.
+  - Default is compact (user/assistant/thoughts); add `--full` to include tool calls/results.
 - Note: `/compact` uses the remote `responses/compact` endpoint by default, which does not accept
   `reasoning.effort`. Disable `remote_compaction` to force local (Responses API) compaction:
   `codex --disable remote_compaction`

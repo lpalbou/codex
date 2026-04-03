@@ -25,7 +25,7 @@ This fork focuses on:
 - **Observability**: adds a `/agents` TUI overlay with live sub-agent status, task, approvals, and
   context-window usage.
 - **Auditability**: adds a `/save` slash command to export the **full** chat history to Markdown
-  (including tool calls/results).
+  (use `--full` to include tool calls/results; default exports only user/assistant/thoughts).
 
 More details: `CHANGELOG.md` and `docs/lpalbou-fork.md`.
 
@@ -135,6 +135,15 @@ model = "your-model-id" # replace with the model name exposed by the server
 > Note: `lmstudio` and `ollama` use the **Responses** wire API (`/v1/responses`). If your server
 > only supports Chat Completions (`/v1/chat/completions`), prefer `ollama-chat` or add your own
 > provider entry.
+
+## Saving history
+
+Use `/save` to write a Markdown export of the current chat history to disk:
+
+- `/save` → `codex-<timestamp>.md` (compact: user/assistant/thoughts)
+- `/save notes` → `notes.md` (compact)
+- `/save --full` → includes tool calls/results, patches, and other events
+- `/save --full notes` → full export to `notes.md`
 
 ## Credits / upstream
 

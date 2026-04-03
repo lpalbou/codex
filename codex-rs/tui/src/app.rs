@@ -985,7 +985,7 @@ impl App {
                 ));
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::SaveTranscript { filename } => {
+            AppEvent::SaveTranscript { filename, mode } => {
                 let saved_at = chrono::Local::now();
                 let filename = filename
                     .as_deref()
@@ -1012,6 +1012,7 @@ impl App {
                     &self.transcript_cells,
                     active_cell_lines,
                     &metadata,
+                    mode,
                 );
 
                 match save_transcript::write_transcript_markdown(&path, &markdown) {

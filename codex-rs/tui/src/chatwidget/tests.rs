@@ -1584,7 +1584,7 @@ async fn slash_save_requests_transcript_export() {
 
     assert_matches!(
         rx.try_recv(),
-        Ok(AppEvent::SaveTranscript { filename: None })
+        Ok(AppEvent::SaveTranscript { filename: None, mode }) if mode == crate::save_transcript::SaveTranscriptMode::Compact
     );
 }
 
@@ -1596,7 +1596,19 @@ async fn slash_save_with_args_passes_filename() {
 
     assert_matches!(
         rx.try_recv(),
-        Ok(AppEvent::SaveTranscript { filename: Some(name) }) if name == "notes"
+        Ok(AppEvent::SaveTranscript { filename: Some(name), mode }) if name == "notes" && mode == crate::save_transcript::SaveTranscriptMode::Compact
+    );
+}
+
+#[tokio::test]
+async fn slash_save_full_requests_full_transcript_export() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command_with_args(SlashCommand::Save, "--full notes".to_string());
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::SaveTranscript { filename: Some(name), mode }) if name == "notes" && mode == crate::save_transcript::SaveTranscriptMode::Full
     );
 }
 

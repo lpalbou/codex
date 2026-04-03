@@ -100,6 +100,7 @@ pub(crate) enum AppEvent {
     /// When `filename` is `None`, a default `codex-<timestamp>.md` filename is chosen.
     SaveTranscript {
         filename: Option<String>,
+        mode: crate::save_transcript::SaveTranscriptMode,
     },
 
     /// Open a live agents dashboard (spawned sub-agents).
