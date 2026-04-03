@@ -2,7 +2,7 @@
 source: tui/src/agents_dashboard.rs
 expression: lines_to_plain_text(&lines)
 ---
-Agents: 2  1 running, 1 done  updated 12:00:00
+Agents: 2  1 spawned  1 running, 1 done  updated 12:00:00
 
 • 00000000-0000-0000-0000-000000000001  running
   model: gpt-5.2 (xhigh)

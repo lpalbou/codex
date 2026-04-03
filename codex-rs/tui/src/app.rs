@@ -880,11 +880,20 @@ impl App {
                 self.chat_widget.on_commit_tick();
             }
             AppEvent::CodexEvent(event) => {
-                if let Some(thread_id) = self.chat_widget.thread_id()
-                    && should_track_agent_event(&event.msg)
+                if should_track_agent_event(&event.msg)
                     && let Ok(mut dashboard) = self.agents_dashboard.lock()
                 {
-                    dashboard.on_event(thread_id, &event);
+                    let thread_id = self.chat_widget.thread_id().or(match &event.msg {
+                        EventMsg::SessionConfigured(ev) => Some(ev.session_id),
+                        _ => None,
+                    });
+
+                    if let Some(thread_id) = thread_id {
+                        dashboard.on_event(thread_id, &event);
+                        if self.overlay.is_some() {
+                            tui.frame_requester().schedule_frame();
+                        }
+                    }
                 }
                 if !self.external_approval_routes.is_empty() {
                     // Store the events while the approval is pending.
@@ -1533,38 +1542,7 @@ impl App {
                     continue;
                 }
 
-                let should_forward = matches!(
-                    event.msg,
-                    EventMsg::SessionConfigured(_)
-                        | EventMsg::TokenCount(_)
-                        | EventMsg::TurnStarted(_)
-                        | EventMsg::TurnComplete(_)
-                        | EventMsg::TurnAborted(_)
-                        | EventMsg::ShutdownComplete
-                        | EventMsg::Error(_)
-                        | EventMsg::Warning(_)
-                        | EventMsg::BackgroundEvent(_)
-                        | EventMsg::StreamError(_)
-                        | EventMsg::UserMessage(_)
-                        | EventMsg::AgentMessage(_)
-                        | EventMsg::ExecCommandBegin(_)
-                        | EventMsg::ExecCommandEnd(_)
-                        | EventMsg::McpToolCallBegin(_)
-                        | EventMsg::McpToolCallEnd(_)
-                        | EventMsg::WebSearchBegin(_)
-                        | EventMsg::WebSearchEnd(_)
-                        | EventMsg::PatchApplyBegin(_)
-                        | EventMsg::PatchApplyEnd(_)
-                        | EventMsg::CollabAgentSpawnBegin(_)
-                        | EventMsg::CollabAgentSpawnEnd(_)
-                        | EventMsg::CollabAgentInteractionBegin(_)
-                        | EventMsg::CollabAgentInteractionEnd(_)
-                        | EventMsg::CollabWaitingBegin(_)
-                        | EventMsg::CollabWaitingEnd(_)
-                        | EventMsg::CollabCloseBegin(_)
-                        | EventMsg::CollabCloseEnd(_)
-                );
-                if should_forward {
+                if should_track_agent_event(&event.msg) {
                     app_event_tx.send(AppEvent::ExternalThreadEvent { thread_id, event });
                 }
             }
@@ -1764,6 +1742,40 @@ impl App {
             }
         });
     }
+}
+
+fn should_track_agent_event(msg: &EventMsg) -> bool {
+    matches!(
+        msg,
+        EventMsg::SessionConfigured(_)
+            | EventMsg::TokenCount(_)
+            | EventMsg::TurnStarted(_)
+            | EventMsg::TurnComplete(_)
+            | EventMsg::TurnAborted(_)
+            | EventMsg::ShutdownComplete
+            | EventMsg::Error(_)
+            | EventMsg::Warning(_)
+            | EventMsg::BackgroundEvent(_)
+            | EventMsg::StreamError(_)
+            | EventMsg::UserMessage(_)
+            | EventMsg::AgentMessage(_)
+            | EventMsg::ExecCommandBegin(_)
+            | EventMsg::ExecCommandEnd(_)
+            | EventMsg::McpToolCallBegin(_)
+            | EventMsg::McpToolCallEnd(_)
+            | EventMsg::WebSearchBegin(_)
+            | EventMsg::WebSearchEnd(_)
+            | EventMsg::PatchApplyBegin(_)
+            | EventMsg::PatchApplyEnd(_)
+            | EventMsg::CollabAgentSpawnBegin(_)
+            | EventMsg::CollabAgentSpawnEnd(_)
+            | EventMsg::CollabAgentInteractionBegin(_)
+            | EventMsg::CollabAgentInteractionEnd(_)
+            | EventMsg::CollabWaitingBegin(_)
+            | EventMsg::CollabWaitingEnd(_)
+            | EventMsg::CollabCloseBegin(_)
+            | EventMsg::CollabCloseEnd(_)
+    )
 }
 
 #[cfg(test)]

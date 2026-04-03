@@ -536,11 +536,18 @@ fn render_dashboard_lines(
     for agent in &snapshot.agents {
         counts.observe(&agent.status);
     }
+    let spawned_count = snapshot
+        .agents
+        .iter()
+        .filter(|agent| agent.parent_thread_id.is_some())
+        .count();
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(Line::from(vec![
         "Agents: ".bold(),
         format!("{}", snapshot.agents.len()).bold(),
+        "  ".into(),
+        format!("{spawned_count} spawned").dim(),
         "  ".into(),
         counts.summary_line(),
         "  ".into(),
@@ -552,7 +559,7 @@ fn render_dashboard_lines(
         lines.push(Line::from("No spawned agents yet.".dim()));
         if collab_enabled {
             lines.push(Line::from(
-                "Tip: ask Codex to use spawn_agent (don’t simulate).".dim(),
+                "Tip: ask Codex to use spawn_agent (don't simulate).".dim(),
             ));
         } else {
             lines.push(Line::from(
@@ -560,6 +567,20 @@ fn render_dashboard_lines(
             ));
         }
         return lines;
+    }
+
+    if spawned_count == 0 {
+        lines.push(Line::from("No spawned agents yet.".dim()));
+        if collab_enabled {
+            lines.push(Line::from(
+                "Tip: ask Codex to use spawn_agent (don't simulate).".dim(),
+            ));
+        } else {
+            lines.push(Line::from(
+                "Tip: enable sub-agent tools with --enable collab.".dim(),
+            ));
+        }
+        lines.push(Line::from(""));
     }
 
     for agent in &snapshot.agents {

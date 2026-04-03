@@ -19,7 +19,6 @@ use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::skills::SkillsManager;
 use codex_protocol::ThreadId;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
@@ -304,25 +303,6 @@ impl ThreadManagerState {
         self.spawn_thread(
             config,
             InitialHistory::New,
-            Arc::clone(&self.auth_manager),
-            agent_control,
-        )
-        .await
-    }
-
-    pub(crate) async fn spawn_new_thread_with_history(
-        &self,
-        config: Config,
-        history: Vec<ResponseItem>,
-        agent_control: AgentControl,
-    ) -> CodexResult<NewThread> {
-        if history.is_empty() {
-            return self.spawn_new_thread(config, agent_control).await;
-        }
-
-        self.spawn_thread(
-            config,
-            InitialHistory::Forked(history.into_iter().map(RolloutItem::ResponseItem).collect()),
             Arc::clone(&self.auth_manager),
             agent_control,
         )

@@ -2463,12 +2463,38 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
 async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let python = match which::which("python").or_else(|_| which::which("python3")) {
-        Ok(path) => path,
-        Err(_) => {
+    let python = {
+        let mut picked = None;
+        for candidate in [
+            "/opt/homebrew/bin/python3",
+            "/usr/local/bin/python3",
+            "/usr/bin/python3",
+        ] {
+            let path = std::path::PathBuf::from(candidate);
+            if path.is_file() {
+                picked = Some(path);
+                break;
+            }
+        }
+
+        let picked = picked
+            .or_else(|| which::which("python3").ok())
+            .or_else(|| which::which("python").ok());
+
+        let Some(path) = picked else {
             eprintln!("python not found in PATH, skipping test.");
             return Ok(());
+        };
+
+        if path.to_string_lossy().contains(".pyenv/shims") {
+            eprintln!(
+                "python resolved to pyenv shim ({}), skipping seatbelt test.",
+                path.display()
+            );
+            return Ok(());
         }
+
+        path
     };
 
     let server = start_mock_server().await;

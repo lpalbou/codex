@@ -3,7 +3,6 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::CodexErr;
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -78,7 +77,6 @@ impl ToolHandler for CollabHandler {
 mod spawn {
     use super::*;
     use crate::agent::AgentRole;
-    use codex_protocol::models::ResponseItem;
     use std::sync::Arc;
 
     #[derive(Debug, Deserialize)]
@@ -121,30 +119,12 @@ mod spawn {
         agent_role
             .apply_to_config(&mut config)
             .map_err(FunctionCallError::RespondToModel)?;
-        let seed_history = config.features.enabled(Feature::CollabForkContext);
-        let history = if seed_history {
-            let mut history = session.clone_history().await.for_prompt();
-            history.retain(|item| {
-                !matches!(item, ResponseItem::Reasoning { .. } | ResponseItem::Compaction { .. })
-            });
-            Some(history)
-        } else {
-            None
-        };
-
-        let result = match history {
-            Some(history) => session
-                .services
-                .agent_control
-                .spawn_agent_with_history(config, prompt.clone(), history)
-                .await,
-            None => session
-                .services
-                .agent_control
-                .spawn_agent(config, prompt.clone())
-                .await,
-        }
-        .map_err(collab_spawn_error);
+        let result = session
+            .services
+            .agent_control
+            .spawn_agent(config, prompt.clone())
+            .await
+            .map_err(collab_spawn_error);
         let (new_thread_id, status) = match &result {
             Ok(thread_id) => (
                 Some(*thread_id),

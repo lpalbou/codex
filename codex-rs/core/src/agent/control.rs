@@ -3,7 +3,6 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use std::sync::Arc;
@@ -41,25 +40,6 @@ impl AgentControl {
         // TODO(jif) add helper for drain
         state.notify_thread_created(new_thread.thread_id);
 
-        self.send_prompt(new_thread.thread_id, prompt).await?;
-
-        Ok(new_thread.thread_id)
-    }
-
-    /// Spawn a new agent thread, seeding it with prior conversation history, then submit
-    /// the initial prompt.
-    pub(crate) async fn spawn_agent_with_history(
-        &self,
-        config: crate::config::Config,
-        prompt: String,
-        history: Vec<ResponseItem>,
-    ) -> CodexResult<ThreadId> {
-        let state = self.upgrade()?;
-        let new_thread = state
-            .spawn_new_thread_with_history(config, history, self.clone())
-            .await?;
-
-        state.notify_thread_created(new_thread.thread_id);
         self.send_prompt(new_thread.thread_id, prompt).await?;
 
         Ok(new_thread.thread_id)

@@ -6,7 +6,7 @@ This fork is for a specific preference:
 
 - One deep, careful agentic run that can take **1 hour or more** is better than 10 fast runs that
   require supervision, debugging, and repeated fixes.
-- Longer runs make the system easier to observe while it’s working, and reduce the total volume of
+- Longer runs make the system easier to observe while it's working, and reduce the total volume of
   trial-and-error text produced across multiple shallow attempts.
 
 ## Goal: predictable model routing + effort
@@ -23,6 +23,8 @@ The main goal is to make it easy to run Codex with a single model + reasoning ef
 - In upstream `rust-v0.87.0`, `agent_type=worker` sub-agents override the model to `gpt-5.2-codex`.
   This fork adds a feature flag `worker_model_override` (default: `false`) so workers can inherit
   the parent model selection.
+- Spawned agents start with **no** conversation history. The only way to include prior discussion
+  is to explicitly include it in the `spawn_agent` prompt message.
 - `/compact` and auto-compaction may use the remote compact endpoint when `remote_compaction` is
   enabled. In `v0.87`, that endpoint does **not** accept `reasoning.effort`, so the only clean way
   to ensure effort is honored for compaction is to disable that feature:
@@ -30,13 +32,13 @@ The main goal is to make it easy to run Codex with a single model + reasoning ef
 
 ## Sub-agent observability (v0.87)
 
-This fork adds a dedicated live “agent dashboard” in the TUI:
+This fork adds a dedicated live "agent dashboard" in the TUI:
 
 - Run `/agents` to open a real-time dashboard of spawned sub-agents (press Esc to close).
-- The dashboard summarizes each agent’s status, last action (tools + collab ops), approvals, model
+- The dashboard summarizes each agent's status, last action (tools + collab ops), approvals, model
   selection, and context-window usage (current/max when available).
 - Note: this dashboard shows **real** spawned sub-agents (threads). To enable spawning, you must
-  enable the `collab` feature (it’s disabled by default in upstream v0.87): `codex --enable collab`.
+  enable the `collab` feature (it's disabled by default in upstream v0.87): `codex --enable collab`.
 
 You can also observe sub-agents in a few other practical ways:
 
@@ -76,7 +78,7 @@ codex-best --version
 
 1. Run `codex-best --enable collab` to open the TUI with sub-agent tools enabled.
 2. In the composer, send a prompt that forces sub-agent usage, for example:
-   “Use the `spawn_agent` tool (do not simulate) to create 2 sub-agents. Agent 1 runs `ls` and reports back. Agent 2 runs `grep -n \"Collab\" codex-rs/core/src/tools/handlers/collab.rs` and reports back. Then wait for them and close both agents.”
+   "Use the `spawn_agent` tool (do not simulate) to create 2 sub-agents. Agent 1 runs `ls` and reports back. Agent 2 runs `grep -n \"Collab\" codex-rs/core/src/tools/handlers/collab.rs` and reports back. Then wait for them and close both agents."
 3. While Codex is working, type `/agents` and press Enter.
 4. Confirm you see agents appear, their status changes, last actions update, and context usage is
    shown when available.
@@ -93,12 +95,21 @@ to enforce a maximum in `spawn_agent`.
 - The TUI shows token usage for the currently viewed session only.
 - Rollouts include `token_count` events; the payload includes both current usage and (when known)
   the model context window.
+- `gpt-5.2` advertises a 400K total context window in the API docs, but Codex reports an **effective
+  input window** (what it can safely keep in history) after reserving headroom for system/tool
+  overhead and model output.
+  - In `v0.87`, local/remote model metadata uses `context_window = 272_000` with
+    `effective_context_window_percent = 95`, which yields `272_000 * 0.95 = 258_400` usable input
+    tokens (what `/status` shows as the context window).
+  - You can override the input window and compaction thresholds in `~/.codex/config.toml` via
+    `model_context_window` and `model_auto_compact_token_limit`, but setting values above what the
+    backend supports will eventually trigger context-window errors.
 
 ## Compaction strategy for sub-agents (v0.87)
 
 Each agent thread is a full session and follows the same compaction rules as the main thread:
 
-- Auto-compaction triggers when token usage reaches the model’s auto-compaction threshold.
+- Auto-compaction triggers when token usage reaches the model's auto-compaction threshold.
 - With `remote_compaction` enabled (and an OpenAI provider), compaction uses the Compact endpoint.
-- Otherwise, compaction is performed “locally” by running a dedicated compaction turn via the
+- Otherwise, compaction is performed "locally" by running a dedicated compaction turn via the
   normal model request path (and will honor `model_reasoning_effort`).
