@@ -133,6 +133,44 @@ pub async fn run_main(
             .push("web_search=\"live\"".to_string());
     }
 
+    let provider_override = cli
+        .provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|provider| !provider.is_empty());
+
+    let force_oss_provider = provider_override.is_some_and(is_oss_provider_id)
+        || (provider_override.is_none() && cli.oss);
+
+    if let Some(base_url) = cli
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+    {
+        let env_key = match provider_override {
+            Some(provider) => {
+                if is_oss_provider_id(provider) {
+                    "CODEX_OSS_BASE_URL"
+                } else {
+                    "OPENAI_BASE_URL"
+                }
+            }
+            None => {
+                if cli.oss {
+                    "CODEX_OSS_BASE_URL"
+                } else {
+                    "OPENAI_BASE_URL"
+                }
+            }
+        };
+        // SAFETY: We apply provider base URL overrides before starting the
+        // interactive runtime so no other threads read these values concurrently.
+        unsafe {
+            std::env::set_var(env_key, base_url);
+        }
+    }
+
     // When using `--oss`, let the bootstrapper pick the model (defaulting to
     // gpt-oss:20b) and ensure it is present locally. Also, force the built‑in
     let raw_overrides = cli.config_overrides.raw_overrides.clone();
@@ -179,7 +217,9 @@ pub async fn run_main(
         }
     };
 
-    let model_provider_override = if cli.oss {
+    let model_provider_override = if let Some(provider) = provider_override {
+        Some(provider.to_string())
+    } else if cli.oss {
         let resolved = resolve_oss_provider(
             cli.oss_provider.as_deref(),
             &config_toml,
@@ -205,12 +245,14 @@ pub async fn run_main(
     // When using `--oss`, let the bootstrapper pick the model based on selected provider
     let model = if let Some(model) = &cli.model {
         Some(model.clone())
-    } else if cli.oss {
-        // Use the provider from model_provider_override
-        model_provider_override
-            .as_ref()
-            .and_then(|provider_id| get_default_model_for_oss_provider(provider_id))
-            .map(std::borrow::ToOwned::to_owned)
+    } else if force_oss_provider {
+        model_provider_override.as_ref().and_then(|provider_id| {
+            if is_oss_provider_id(provider_id.as_str()) {
+                get_default_model_for_oss_provider(provider_id).map(std::borrow::ToOwned::to_owned)
+            } else {
+                None
+            }
+        })
     } else {
         None // No model specified, will use the default.
     };
@@ -225,7 +267,7 @@ pub async fn run_main(
         model_provider: model_provider_override.clone(),
         config_profile: cli.config_profile.clone(),
         codex_linux_sandbox_exe,
-        show_raw_agent_reasoning: cli.oss.then_some(true),
+        show_raw_agent_reasoning: force_oss_provider.then_some(true),
         additional_writable_roots: additional_dirs,
         ..Default::default()
     };
@@ -289,7 +331,11 @@ pub async fn run_main(
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
 
-    if cli.oss && model_provider_override.is_some() {
+    if force_oss_provider
+        && model_provider_override
+            .as_ref()
+            .is_some_and(|id| is_oss_provider_id(id))
+    {
         // We're in the oss section, so provider_id should be Some
         // Let's handle None case gracefully though just in case
         let provider_id = match model_provider_override.as_ref() {
@@ -346,6 +392,10 @@ pub async fn run_main(
     )
     .await
     .map_err(|err| std::io::Error::other(err.to_string()))
+}
+
+fn is_oss_provider_id(provider_id: &str) -> bool {
+    matches!(provider_id, "lmstudio" | "ollama" | "ollama-chat")
 }
 
 async fn run_ratatui_app(

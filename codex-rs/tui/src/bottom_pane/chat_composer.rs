@@ -1497,7 +1497,10 @@ impl ChatComposer {
                 && let Some((_n, cmd)) = built_in_slash_commands()
                     .into_iter()
                     .find(|(command_name, _)| *command_name == name)
-                && matches!(cmd, SlashCommand::Review | SlashCommand::Save)
+                && matches!(
+                    cmd,
+                    SlashCommand::Collab | SlashCommand::Review | SlashCommand::Save
+                )
             {
                 self.textarea.set_text("");
                 return Some(InputResult::CommandWithArgs(cmd, rest.to_string()));

@@ -53,6 +53,19 @@ pub struct Cli {
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
+    /// Model provider to use (openai, lmstudio, ollama, ollama-chat).
+    ///
+    /// This overrides config defaults and applies to spawned sub-agents.
+    #[arg(long = "provider")]
+    pub provider: Option<String>,
+
+    /// Override the provider base URL (e.g. http://localhost:11434/v1).
+    ///
+    /// When used with an OSS provider, sets CODEX_OSS_BASE_URL for this run.
+    /// Otherwise sets OPENAI_BASE_URL for this run.
+    #[arg(long = "base-url")]
+    pub base_url: Option<String>,
+
     /// Convenience flag to select the local open source model provider. Equivalent to -c
     /// model_provider=oss; verifies a local LM Studio or Ollama server is running.
     #[arg(long = "oss", default_value_t = false)]

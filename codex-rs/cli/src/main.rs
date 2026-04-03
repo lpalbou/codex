@@ -30,6 +30,7 @@ use codex_tui::ExitReason;
 use codex_tui::update_action::UpdateAction;
 use codex_tui2 as tui2;
 use owo_colors::OwoColorize;
+use std::path::Path;
 use std::path::PathBuf;
 use supports_color::Stream;
 
@@ -470,10 +471,47 @@ fn stage_str(stage: codex_core::features::Stage) -> &'static str {
 }
 
 fn main() -> anyhow::Result<()> {
+    maybe_override_codex_home_for_unleashed()?;
     arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
         cli_main(codex_linux_sandbox_exe).await?;
         Ok(())
     })
+}
+
+fn maybe_override_codex_home_for_unleashed() -> anyhow::Result<()> {
+    if std::env::var("CODEX_HOME")
+        .ok()
+        .is_some_and(|path| !path.trim().is_empty())
+    {
+        return Ok(());
+    }
+
+    let Some(arg0) = std::env::args().next() else {
+        return Ok(());
+    };
+
+    let exe_stem = Path::new(&arg0)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default();
+    if exe_stem != "codex-unleashed" {
+        return Ok(());
+    }
+
+    let codex_home = find_codex_home()?.to_path_buf();
+    let Some(parent) = codex_home.parent() else {
+        return Ok(());
+    };
+
+    let unleashed_home = parent.join(".codex-unleashed");
+    std::fs::create_dir_all(&unleashed_home)?;
+    // SAFETY: We override CODEX_HOME before parsing CLI flags or initializing
+    // any runtime threads that may read configuration paths from the process
+    // environment.
+    unsafe {
+        std::env::set_var("CODEX_HOME", unleashed_home.as_os_str());
+    }
+    Ok(())
 }
 
 async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {

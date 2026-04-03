@@ -2108,10 +2108,16 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::SaveTranscript {
                     filename: None,
                     mode: crate::save_transcript::SaveTranscriptMode::Compact,
+                    format: crate::save_transcript::SaveTranscriptFormat::Markdown,
                 });
             }
             SlashCommand::Agents => {
                 self.app_event_tx.send(AppEvent::OpenAgentsOverlay);
+            }
+            SlashCommand::Collab => {
+                let enabled = !self.config.features.enabled(Feature::Collab);
+                self.app_event_tx
+                    .send(AppEvent::SetCollabEnabled { enabled });
             }
             SlashCommand::Ps => {
                 self.add_ps_output();
@@ -2193,11 +2199,50 @@ impl ChatWidget {
                     },
                 });
             }
+            SlashCommand::Collab if trimmed.is_empty() => {
+                self.dispatch_command(cmd);
+            }
+            SlashCommand::Collab => {
+                let desired = if trimmed.eq_ignore_ascii_case("on")
+                    || trimmed.eq_ignore_ascii_case("enable")
+                    || trimmed.eq_ignore_ascii_case("true")
+                {
+                    Some(true)
+                } else if trimmed.eq_ignore_ascii_case("off")
+                    || trimmed.eq_ignore_ascii_case("disable")
+                    || trimmed.eq_ignore_ascii_case("false")
+                {
+                    Some(false)
+                } else if trimmed.eq_ignore_ascii_case("status") {
+                    None
+                } else {
+                    self.add_error_message(format!(
+                        "Unknown collab mode '{trimmed}'. Try '/collab on' or '/collab off'."
+                    ));
+                    return;
+                };
+
+                match desired {
+                    Some(enabled) => {
+                        self.app_event_tx
+                            .send(AppEvent::SetCollabEnabled { enabled });
+                    }
+                    None => {
+                        let state = if self.config.features.enabled(Feature::Collab) {
+                            "on"
+                        } else {
+                            "off"
+                        };
+                        self.add_info_message(format!("Collab is {state}."), None);
+                    }
+                }
+            }
             SlashCommand::Save => {
                 let parsed = crate::save_transcript::parse_save_transcript_args(trimmed);
                 self.app_event_tx.send(AppEvent::SaveTranscript {
                     filename: parsed.filename,
                     mode: parsed.mode,
+                    format: parsed.format,
                 });
             }
             _ => self.dispatch_command(cmd),

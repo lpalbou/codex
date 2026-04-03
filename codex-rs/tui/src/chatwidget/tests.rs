@@ -1584,7 +1584,7 @@ async fn slash_save_requests_transcript_export() {
 
     assert_matches!(
         rx.try_recv(),
-        Ok(AppEvent::SaveTranscript { filename: None, mode }) if mode == crate::save_transcript::SaveTranscriptMode::Compact
+        Ok(AppEvent::SaveTranscript { filename: None, mode, format }) if mode == crate::save_transcript::SaveTranscriptMode::Compact && format == crate::save_transcript::SaveTranscriptFormat::Markdown
     );
 }
 
@@ -1596,7 +1596,7 @@ async fn slash_save_with_args_passes_filename() {
 
     assert_matches!(
         rx.try_recv(),
-        Ok(AppEvent::SaveTranscript { filename: Some(name), mode }) if name == "notes" && mode == crate::save_transcript::SaveTranscriptMode::Compact
+        Ok(AppEvent::SaveTranscript { filename: Some(name), mode, format }) if name == "notes" && mode == crate::save_transcript::SaveTranscriptMode::Compact && format == crate::save_transcript::SaveTranscriptFormat::Markdown
     );
 }
 
@@ -1608,7 +1608,31 @@ async fn slash_save_full_requests_full_transcript_export() {
 
     assert_matches!(
         rx.try_recv(),
-        Ok(AppEvent::SaveTranscript { filename: Some(name), mode }) if name == "notes" && mode == crate::save_transcript::SaveTranscriptMode::Full
+        Ok(AppEvent::SaveTranscript { filename: Some(name), mode, format }) if name == "notes" && mode == crate::save_transcript::SaveTranscriptMode::Full && format == crate::save_transcript::SaveTranscriptFormat::Markdown
+    );
+}
+
+#[tokio::test]
+async fn slash_save_sft_jsonl_requests_sft_export() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command_with_args(SlashCommand::Save, "--sft-jsonl data".to_string());
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::SaveTranscript { filename: Some(name), mode, format }) if name == "data" && mode == crate::save_transcript::SaveTranscriptMode::Compact && format == crate::save_transcript::SaveTranscriptFormat::SftJsonl
+    );
+}
+
+#[tokio::test]
+async fn slash_save_cpt_jsonl_requests_cpt_export() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command_with_args(SlashCommand::Save, "--cpt-jsonl data".to_string());
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::SaveTranscript { filename: Some(name), mode, format }) if name == "data" && mode == crate::save_transcript::SaveTranscriptMode::Compact && format == crate::save_transcript::SaveTranscriptFormat::CptJsonl
     );
 }
 

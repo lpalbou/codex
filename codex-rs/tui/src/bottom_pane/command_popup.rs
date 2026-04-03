@@ -130,8 +130,20 @@ impl CommandPopup {
             return out;
         }
 
+        let builtin_ranks: std::collections::HashMap<SlashCommand, usize> = self
+            .builtins
+            .iter()
+            .enumerate()
+            .map(|(idx, (_, cmd))| (*cmd, idx))
+            .collect();
+
         for (_, cmd) in self.builtins.iter() {
             if let Some((indices, score)) = fuzzy_match(cmd.command(), filter) {
+                let score = if cmd.command().starts_with(filter) {
+                    i32::MIN
+                } else {
+                    score
+                };
                 out.push((CommandItem::Builtin(*cmd), Some(indices), score));
             }
         }
@@ -146,16 +158,20 @@ impl CommandPopup {
         }
         // When filtering, sort by ascending score and then by name for stability.
         out.sort_by(|a, b| {
-            a.2.cmp(&b.2).then_with(|| {
-                let an = match a.0 {
-                    CommandItem::Builtin(c) => c.command(),
-                    CommandItem::UserPrompt(i) => &self.prompts[i].name,
-                };
-                let bn = match b.0 {
-                    CommandItem::Builtin(c) => c.command(),
-                    CommandItem::UserPrompt(i) => &self.prompts[i].name,
-                };
-                an.cmp(bn)
+            a.2.cmp(&b.2).then_with(|| match (a.0, b.0) {
+                (CommandItem::Builtin(ac), CommandItem::Builtin(bc)) => builtin_ranks
+                    .get(&ac)
+                    .unwrap_or(&usize::MAX)
+                    .cmp(builtin_ranks.get(&bc).unwrap_or(&usize::MAX)),
+                (CommandItem::UserPrompt(ai), CommandItem::UserPrompt(bi)) => {
+                    self.prompts[ai].name.cmp(&self.prompts[bi].name)
+                }
+                (CommandItem::Builtin(ac), CommandItem::UserPrompt(bi)) => {
+                    ac.command().cmp(&self.prompts[bi].name)
+                }
+                (CommandItem::UserPrompt(ai), CommandItem::Builtin(bc)) => {
+                    self.prompts[ai].name.as_str().cmp(bc.command())
+                }
             })
         });
         out

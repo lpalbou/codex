@@ -24,6 +24,7 @@ use crate::history_cell::SessionHeaderHistoryCell;
 use crate::history_cell::UnifiedExecInteractionCell;
 use crate::history_cell::UserHistoryCell;
 use crate::version::CODEX_CLI_VERSION;
+use serde::Serialize;
 
 pub(crate) struct SaveTranscriptMetadata {
     pub(crate) saved_at: DateTime<Local>,
@@ -31,6 +32,13 @@ pub(crate) struct SaveTranscriptMetadata {
     pub(crate) model: Option<String>,
     pub(crate) reasoning_effort: Option<ReasoningEffort>,
     pub(crate) cwd: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SaveTranscriptFormat {
+    Markdown,
+    SftJsonl,
+    CptJsonl,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,14 +55,25 @@ pub(crate) enum SaveTranscriptMode {
 pub(crate) struct SaveTranscriptArgs {
     pub(crate) filename: Option<String>,
     pub(crate) mode: SaveTranscriptMode,
+    pub(crate) format: SaveTranscriptFormat,
 }
 
 pub(crate) fn parse_save_transcript_args(args: &str) -> SaveTranscriptArgs {
     let mut mode = SaveTranscriptMode::Compact;
+    let mut format = SaveTranscriptFormat::Markdown;
     let mut parts: Vec<&str> = args.split_whitespace().collect();
     parts.retain(|part| {
         if *part == "--full" {
             mode = SaveTranscriptMode::Full;
+            false
+        } else if *part == "--markdown" {
+            format = SaveTranscriptFormat::Markdown;
+            false
+        } else if *part == "--sft-jsonl" {
+            format = SaveTranscriptFormat::SftJsonl;
+            false
+        } else if *part == "--cpt-jsonl" {
+            format = SaveTranscriptFormat::CptJsonl;
             false
         } else {
             true
@@ -62,7 +81,11 @@ pub(crate) fn parse_save_transcript_args(args: &str) -> SaveTranscriptArgs {
     });
 
     let filename = (!parts.is_empty()).then(|| parts.join(" "));
-    SaveTranscriptArgs { filename, mode }
+    SaveTranscriptArgs {
+        filename,
+        mode,
+        format,
+    }
 }
 
 pub(crate) fn default_transcript_filename(saved_at: DateTime<Local>) -> String {
@@ -75,6 +98,27 @@ pub(crate) fn normalize_markdown_filename(filename: &str) -> String {
         trimmed.to_string()
     } else {
         format!("{trimmed}.md")
+    }
+}
+
+pub(crate) fn default_transcript_filename_jsonl(
+    saved_at: DateTime<Local>,
+    format: SaveTranscriptFormat,
+) -> String {
+    let prefix = match format {
+        SaveTranscriptFormat::Markdown => "codex",
+        SaveTranscriptFormat::SftJsonl => "codex-sft",
+        SaveTranscriptFormat::CptJsonl => "codex-cpt",
+    };
+    format!("{prefix}-{}.jsonl", saved_at.format("%Y%m%dT%H%M%S"))
+}
+
+pub(crate) fn normalize_jsonl_filename(filename: &str) -> String {
+    let trimmed = filename.trim();
+    if trimmed.to_ascii_lowercase().ends_with(".jsonl") {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}.jsonl")
     }
 }
 
@@ -132,6 +176,45 @@ pub(crate) fn export_chat_history_markdown(
     output
 }
 
+pub(crate) fn export_chat_history_sft_jsonl(
+    transcript_cells: &[Arc<dyn HistoryCell>],
+    metadata: &SaveTranscriptMetadata,
+) -> String {
+    const EXPORT_WIDTH: u16 = u16::MAX;
+
+    let messages = export_conversation_messages(transcript_cells, EXPORT_WIDTH);
+    let record = SftJsonlRecord {
+        id: export_id(metadata),
+        created_at: metadata.saved_at.timestamp(),
+        messages,
+        metadata: export_metadata(metadata),
+    };
+
+    let mut out = serde_json::to_string(&record).unwrap_or_else(|_| "{}".to_string());
+    out.push('\n');
+    out
+}
+
+pub(crate) fn export_chat_history_cpt_jsonl(
+    transcript_cells: &[Arc<dyn HistoryCell>],
+    metadata: &SaveTranscriptMetadata,
+) -> String {
+    const EXPORT_WIDTH: u16 = u16::MAX;
+
+    let messages = export_conversation_messages(transcript_cells, EXPORT_WIDTH);
+    let text = format_cpt_text(&messages);
+    let record = CptJsonlRecord {
+        id: export_id(metadata),
+        created_at: metadata.saved_at.timestamp(),
+        text,
+        metadata: export_metadata(metadata),
+    };
+
+    let mut out = serde_json::to_string(&record).unwrap_or_else(|_| "{}".to_string());
+    out.push('\n');
+    out
+}
+
 pub(crate) fn write_transcript_markdown(path: &Path, markdown: &str) -> io::Result<()> {
     let mut opts = OpenOptions::new();
     opts.create(true).truncate(true).write(true);
@@ -144,6 +227,21 @@ pub(crate) fn write_transcript_markdown(path: &Path, markdown: &str) -> io::Resu
 
     let mut file = opts.open(path)?;
     file.write_all(markdown.as_bytes())?;
+    file.flush()
+}
+
+pub(crate) fn write_transcript_jsonl(path: &Path, jsonl: &str) -> io::Result<()> {
+    let mut opts = OpenOptions::new();
+    opts.create(true).truncate(true).write(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+
+    let mut file = opts.open(path)?;
+    file.write_all(jsonl.as_bytes())?;
     file.flush()
 }
 
@@ -218,6 +316,103 @@ fn export_entries(
         });
     }
 
+    out
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TranscriptMetadataJson {
+    saved_at: String,
+    codex_version: String,
+    cwd: String,
+    thread_id: Option<String>,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SftJsonlMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SftJsonlRecord {
+    id: String,
+    created_at: i64,
+    messages: Vec<SftJsonlMessage>,
+    metadata: TranscriptMetadataJson,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CptJsonlRecord {
+    id: String,
+    created_at: i64,
+    text: String,
+    metadata: TranscriptMetadataJson,
+}
+
+fn export_id(metadata: &SaveTranscriptMetadata) -> String {
+    metadata
+        .thread_id
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| format!("codex-{}", metadata.saved_at.format("%Y%m%dT%H%M%S")))
+}
+
+fn export_metadata(metadata: &SaveTranscriptMetadata) -> TranscriptMetadataJson {
+    TranscriptMetadataJson {
+        saved_at: metadata.saved_at.to_rfc3339(),
+        codex_version: CODEX_CLI_VERSION.to_string(),
+        cwd: metadata.cwd.display().to_string(),
+        thread_id: metadata.thread_id.as_ref().map(ToString::to_string),
+        model: metadata.model.clone(),
+        reasoning_effort: metadata.reasoning_effort.map(|effort| effort.to_string()),
+    }
+}
+
+fn export_conversation_messages(
+    transcript_cells: &[Arc<dyn HistoryCell>],
+    width: u16,
+) -> Vec<SftJsonlMessage> {
+    export_entries(transcript_cells, SaveTranscriptMode::Compact, width)
+        .into_iter()
+        .filter_map(|entry| match entry.kind {
+            ExportEntryKind::User => Some(SftJsonlMessage {
+                role: "user".to_string(),
+                content: entry.content.trim().to_string(),
+            }),
+            ExportEntryKind::Assistant => Some(SftJsonlMessage {
+                role: "assistant".to_string(),
+                content: entry.content.trim().to_string(),
+            }),
+            _ => None,
+        })
+        .filter(|msg| !msg.content.is_empty())
+        .collect()
+}
+
+fn format_cpt_text(messages: &[SftJsonlMessage]) -> String {
+    let mut out = String::new();
+    for (idx, msg) in messages.iter().enumerate() {
+        let label = match msg.role.as_str() {
+            "user" => "User",
+            "assistant" => "Assistant",
+            other => other,
+        };
+
+        if idx > 0 {
+            out.push('\n');
+            out.push('\n');
+        }
+        out.push_str(label);
+        out.push(':');
+        out.push('\n');
+        out.push_str(msg.content.trim_end());
+    }
     out
 }
 
@@ -440,5 +635,12 @@ mod tests {
         assert_eq!(choose_code_fence("hello"), "```");
         assert_eq!(choose_code_fence("```"), "````");
         assert_eq!(choose_code_fence("``````"), "```````");
+    }
+
+    #[test]
+    fn normalize_jsonl_filename_appends_extension_when_missing() {
+        assert_eq!(normalize_jsonl_filename("data"), "data.jsonl");
+        assert_eq!(normalize_jsonl_filename("data.jsonl"), "data.jsonl");
+        assert_eq!(normalize_jsonl_filename("data.JSONL"), "data.JSONL");
     }
 }

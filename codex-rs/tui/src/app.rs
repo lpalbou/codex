@@ -399,23 +399,27 @@ impl App {
             .get_models_manager()
             .get_default_model(&config.model, &config, RefreshStrategy::Offline)
             .await;
-        let available_models = thread_manager
-            .get_models_manager()
-            .list_models(&config, RefreshStrategy::Offline)
+
+        if config.model_provider.is_openai() {
+            let available_models = thread_manager
+                .get_models_manager()
+                .list_models(&config, RefreshStrategy::Offline)
+                .await;
+            let exit_info = handle_model_migration_prompt_if_needed(
+                tui,
+                &mut config,
+                model.as_str(),
+                &app_event_tx,
+                available_models,
+            )
             .await;
-        let exit_info = handle_model_migration_prompt_if_needed(
-            tui,
-            &mut config,
-            model.as_str(),
-            &app_event_tx,
-            available_models,
-        )
-        .await;
-        if let Some(exit_info) = exit_info {
-            return Ok(exit_info);
-        }
-        if let Some(updated_model) = config.model.clone() {
-            model = updated_model;
+            if let Some(exit_info) = exit_info {
+                return Ok(exit_info);
+            }
+
+            if let Some(updated_model) = config.model.clone() {
+                model = updated_model;
+            }
         }
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
@@ -985,14 +989,34 @@ impl App {
                 ));
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::SaveTranscript { filename, mode } => {
+            AppEvent::SaveTranscript {
+                filename,
+                mode,
+                format,
+            } => {
                 let saved_at = chrono::Local::now();
                 let filename = filename
                     .as_deref()
                     .map(str::trim)
                     .filter(|name| !name.is_empty())
-                    .map(save_transcript::normalize_markdown_filename)
-                    .unwrap_or_else(|| save_transcript::default_transcript_filename(saved_at));
+                    .map(|name| match format {
+                        save_transcript::SaveTranscriptFormat::Markdown => {
+                            save_transcript::normalize_markdown_filename(name)
+                        }
+                        save_transcript::SaveTranscriptFormat::SftJsonl
+                        | save_transcript::SaveTranscriptFormat::CptJsonl => {
+                            save_transcript::normalize_jsonl_filename(name)
+                        }
+                    })
+                    .unwrap_or_else(|| match format {
+                        save_transcript::SaveTranscriptFormat::Markdown => {
+                            save_transcript::default_transcript_filename(saved_at)
+                        }
+                        save_transcript::SaveTranscriptFormat::SftJsonl
+                        | save_transcript::SaveTranscriptFormat::CptJsonl => {
+                            save_transcript::default_transcript_filename_jsonl(saved_at, format)
+                        }
+                    });
 
                 let mut path = PathBuf::from(filename);
                 if path.is_relative() {
@@ -1007,15 +1031,35 @@ impl App {
                     cwd: self.config.cwd.clone(),
                 };
 
-                let active_cell_lines = self.chat_widget.active_cell_transcript_lines(u16::MAX);
-                let markdown = save_transcript::export_chat_history_markdown(
-                    &self.transcript_cells,
-                    active_cell_lines,
-                    &metadata,
-                    mode,
-                );
+                let result = match format {
+                    save_transcript::SaveTranscriptFormat::Markdown => {
+                        let active_cell_lines =
+                            self.chat_widget.active_cell_transcript_lines(u16::MAX);
+                        let markdown = save_transcript::export_chat_history_markdown(
+                            &self.transcript_cells,
+                            active_cell_lines,
+                            &metadata,
+                            mode,
+                        );
+                        save_transcript::write_transcript_markdown(&path, &markdown)
+                    }
+                    save_transcript::SaveTranscriptFormat::SftJsonl => {
+                        let jsonl = save_transcript::export_chat_history_sft_jsonl(
+                            &self.transcript_cells,
+                            &metadata,
+                        );
+                        save_transcript::write_transcript_jsonl(&path, &jsonl)
+                    }
+                    save_transcript::SaveTranscriptFormat::CptJsonl => {
+                        let jsonl = save_transcript::export_chat_history_cpt_jsonl(
+                            &self.transcript_cells,
+                            &metadata,
+                        );
+                        save_transcript::write_transcript_jsonl(&path, &jsonl)
+                    }
+                };
 
-                match save_transcript::write_transcript_markdown(&path, &markdown) {
+                match result {
                     Ok(()) => {
                         self.chat_widget.add_info_message(
                             format!("Saved chat history to {}", path.display()),
@@ -1371,6 +1415,77 @@ impl App {
                         "Failed to update experimental features: {err}"
                     ));
                 }
+            }
+            AppEvent::SetCollabEnabled { enabled } => {
+                let already_enabled = self.config.features.enabled(Feature::Collab);
+                if already_enabled == enabled {
+                    let state = if enabled { "on" } else { "off" };
+                    self.chat_widget
+                        .add_info_message(format!("Collab is already {state}."), None);
+                    return Ok(AppRunControl::Continue);
+                }
+
+                if enabled {
+                    self.config.features.enable(Feature::Collab);
+                    self.chat_widget.set_feature_enabled(Feature::Collab, true);
+                } else {
+                    self.config.features.disable(Feature::Collab);
+                    self.chat_widget.set_feature_enabled(Feature::Collab, false);
+                }
+
+                let Some(rollout_path) = self.chat_widget.rollout_path() else {
+                    self.chat_widget.add_error_message(
+                        "Collab was toggled for this run, but Codex cannot restart the agent session yet (rollout path not available). Restart Codex to apply."
+                            .to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                };
+
+                let banner = if enabled {
+                    "Collab is now ON for this run. Restarting the agent session to apply tool availability."
+                } else {
+                    "Collab is now OFF for this run. Restarting the agent session to apply tool availability."
+                };
+
+                match self
+                    .server
+                    .fork_thread(usize::MAX, self.config.clone(), rollout_path)
+                    .await
+                {
+                    Ok(forked) => {
+                        self.shutdown_current_thread().await;
+                        let init = crate::chatwidget::ChatWidgetInit {
+                            config: self.config.clone(),
+                            frame_requester: tui.frame_requester(),
+                            app_event_tx: self.app_event_tx.clone(),
+                            initial_prompt: None,
+                            initial_images: Vec::new(),
+                            enhanced_keys_supported: self.enhanced_keys_supported,
+                            auth_manager: self.auth_manager.clone(),
+                            models_manager: self.server.get_models_manager(),
+                            feedback: self.feedback.clone(),
+                            is_first_run: false,
+                            model: Some(self.current_model.clone()),
+                        };
+                        self.chat_widget = ChatWidget::new_from_existing(
+                            init,
+                            forked.thread,
+                            forked.session_configured,
+                        );
+                        self.current_model = model_info.slug.clone();
+                        self.chat_widget
+                            .add_plain_history_lines(vec![Line::from(banner)]);
+                        self.chat_widget.add_plain_history_lines(vec![Line::from(
+                            "Tip: use /experimental to persist collab across restarts.",
+                        )]);
+                    }
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to restart session after toggling collab: {err}"
+                        ));
+                    }
+                }
+                tui.frame_requester().schedule_frame();
             }
             AppEvent::SkipNextWorldWritableScan => {
                 self.skip_world_writable_scan_once = true;

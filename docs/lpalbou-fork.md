@@ -9,6 +9,16 @@ This fork is for a specific preference:
 - Longer runs make the system easier to observe while it's working, and reduce the total volume of
   trial-and-error text produced across multiple shallow attempts.
 
+## Fork-specific documentation
+
+These pages are the best starting point for a practical deep dive:
+
+- Installation: `docs/unleashed/installation.md`
+- Model control + reasoning: `docs/unleashed/model-control.md`
+- Local models: `docs/unleashed/local-models.md`
+- `/agents` dashboard: `docs/unleashed/agents-dashboard.md`
+- `/save` exporters: `docs/unleashed/save.md`
+
 ## Goal: predictable model routing + effort
 
 The main goal is to make it easy to run Codex with a single model + reasoning effort (for example
@@ -20,9 +30,9 @@ The main goal is to make it easy to run Codex with a single model + reasoning ef
 
 ## Notes on model/effort consistency (v0.87)
 
-- In upstream `rust-v0.87.0`, `agent_type=worker` sub-agents override the model to `gpt-5.2-codex`.
-  This fork adds a feature flag `worker_model_override` (default: `false`) so workers can inherit
-  the parent model selection.
+- In `rust-v0.87.0`, `agent_type=worker` can override the model to `gpt-5.2-codex`, but this is
+  gated behind the experimental feature flag `worker_model_override` (default: disabled). Keep it
+  disabled if you want workers to inherit the parent model selection.
 - Spawned agents start with **no** conversation history. The only way to include prior discussion
   is to explicitly include it in the `spawn_agent` prompt message.
 - `/compact` and auto-compaction may use the remote compact endpoint when `remote_compaction` is
@@ -101,7 +111,7 @@ codex-best --version
 ## Max sub-agents (v0.87)
 
 There is no built-in hard limit on the number of spawned agents in `v0.87`. The main control is
-prompt discipline (re-use agents; close them when done). A hard cap would require a source patch
+prompt discipline (reuse agents; close them when done). A hard cap would require a source patch
 to enforce a maximum in `spawn_agent`.
 
 ## Context window / token usage for sub-agents (v0.87)

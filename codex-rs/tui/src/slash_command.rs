@@ -30,6 +30,7 @@ pub enum SlashCommand {
     Status,
     Save,
     Agents,
+    Collab,
     Mcp,
     Logout,
     Quit,
@@ -59,6 +60,7 @@ impl SlashCommand {
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Save => "save chat history to a markdown file",
             SlashCommand::Agents => "show live sub-agent dashboard",
+            SlashCommand::Collab => "toggle sub-agent tools on/off (collab)",
             SlashCommand::Ps => "list background terminals",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Approvals => "choose what Codex can do without approval",
@@ -91,7 +93,8 @@ impl SlashCommand {
             | SlashCommand::ElevateSandbox
             | SlashCommand::Experimental
             | SlashCommand::Review
-            | SlashCommand::Logout => false,
+            | SlashCommand::Logout
+            | SlashCommand::Collab => false,
             SlashCommand::Diff
             | SlashCommand::Mention
             | SlashCommand::Skills

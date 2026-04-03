@@ -95,12 +95,13 @@ pub(crate) enum AppEvent {
     /// Result of computing a `/diff` command.
     DiffResult(String),
 
-    /// Save the full chat history to a markdown file.
+    /// Save the chat history to a file.
     ///
-    /// When `filename` is `None`, a default `codex-<timestamp>.md` filename is chosen.
+    /// When `filename` is `None`, a default filename is chosen based on `format`.
     SaveTranscript {
         filename: Option<String>,
         mode: crate::save_transcript::SaveTranscriptMode,
+        format: crate::save_transcript::SaveTranscriptFormat,
     },
 
     /// Open a live agents dashboard (spawned sub-agents).
@@ -189,6 +190,14 @@ pub(crate) enum AppEvent {
     /// Update feature flags and persist them to the top-level config.
     UpdateFeatureFlags {
         updates: Vec<(Feature, bool)>,
+    },
+
+    /// Enable or disable collab tools (spawned sub-agent tool calls) for this run.
+    ///
+    /// Note: toggling collab requires restarting the underlying agent session so the toolset is
+    /// rebuilt with the updated feature state.
+    SetCollabEnabled {
+        enabled: bool,
     },
 
     /// Update whether the full access warning prompt has been acknowledged.
