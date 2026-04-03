@@ -26,6 +26,7 @@ use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
+use crate::save_transcript;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -982,6 +983,51 @@ impl App {
                     pager_lines,
                     "D I F F".to_string(),
                 ));
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::SaveTranscript { filename } => {
+                let saved_at = chrono::Local::now();
+                let filename = filename
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(save_transcript::normalize_markdown_filename)
+                    .unwrap_or_else(|| save_transcript::default_transcript_filename(saved_at));
+
+                let mut path = PathBuf::from(filename);
+                if path.is_relative() {
+                    path = self.config.cwd.join(path);
+                }
+
+                let metadata = save_transcript::SaveTranscriptMetadata {
+                    saved_at,
+                    thread_id: self.chat_widget.thread_id(),
+                    model: Some(self.current_model.clone()),
+                    reasoning_effort: self.chat_widget.config_ref().model_reasoning_effort,
+                    cwd: self.config.cwd.clone(),
+                };
+
+                let active_cell_lines = self.chat_widget.active_cell_transcript_lines(u16::MAX);
+                let markdown = save_transcript::export_chat_history_markdown(
+                    &self.transcript_cells,
+                    active_cell_lines,
+                    &metadata,
+                );
+
+                match save_transcript::write_transcript_markdown(&path, &markdown) {
+                    Ok(()) => {
+                        self.chat_widget.add_info_message(
+                            format!("Saved chat history to {}", path.display()),
+                            None,
+                        );
+                    }
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save chat history to {}: {err}",
+                            path.display()
+                        ));
+                    }
+                }
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenAgentsOverlay => {

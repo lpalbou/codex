@@ -1497,7 +1497,7 @@ impl ChatComposer {
                 && let Some((_n, cmd)) = built_in_slash_commands()
                     .into_iter()
                     .find(|(command_name, _)| *command_name == name)
-                && cmd == SlashCommand::Review
+                && matches!(cmd, SlashCommand::Review | SlashCommand::Save)
             {
                 self.textarea.set_text("");
                 return Some(InputResult::CommandWithArgs(cmd, rest.to_string()));
@@ -3017,6 +3017,37 @@ mod tests {
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(matches!(result, InputResult::Command(SlashCommand::Diff)));
+    }
+
+    #[test]
+    fn slash_save_with_args_dispatches_command_with_args() {
+        use crate::slash_command::SlashCommand;
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.textarea.set_text("/save notes");
+        composer.textarea.set_cursor("/save notes".len());
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::CommandWithArgs(SlashCommand::Save, args) => {
+                assert_eq!(args, "notes");
+            }
+            other => panic!("expected /save to dispatch CommandWithArgs, got {other:?}"),
+        }
     }
 
     /// Behavior: if a burst is buffering text and the user presses a non-char key, flush the

@@ -2104,6 +2104,10 @@ impl ChatWidget {
             SlashCommand::Status => {
                 self.add_status_output();
             }
+            SlashCommand::Save => {
+                self.app_event_tx
+                    .send(AppEvent::SaveTranscript { filename: None });
+            }
             SlashCommand::Agents => {
                 self.app_event_tx.send(AppEvent::OpenAgentsOverlay);
             }
@@ -2186,6 +2190,11 @@ impl ChatWidget {
                         user_facing_hint: None,
                     },
                 });
+            }
+            SlashCommand::Save => {
+                let filename = (!trimmed.is_empty()).then_some(trimmed.to_string());
+                self.app_event_tx
+                    .send(AppEvent::SaveTranscript { filename });
             }
             _ => self.dispatch_command(cmd),
         }

@@ -95,6 +95,13 @@ pub(crate) enum AppEvent {
     /// Result of computing a `/diff` command.
     DiffResult(String),
 
+    /// Save the full chat history to a markdown file.
+    ///
+    /// When `filename` is `None`, a default `codex-<timestamp>.md` filename is chosen.
+    SaveTranscript {
+        filename: Option<String>,
+    },
+
     /// Open a live agents dashboard (spawned sub-agents).
     OpenAgentsOverlay,
 

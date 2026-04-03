@@ -51,6 +51,20 @@ You can also observe sub-agents in a few other practical ways:
 - **Logs:** the TUI writes logs to `$CODEX_HOME/log/codex-tui.log`. You can follow it with:
   `tail -F $CODEX_HOME/log/codex-tui.log` and increase verbosity via `RUST_LOG`.
 
+## Export full chat history (`/save`)
+
+This fork adds a lightweight transcript exporter so you can archive a session without relying on
+rollout JSONL parsing:
+
+- `/save` writes `codex-<timestamp>.md` in the current working directory.
+- `/save my-session` writes `my-session.md` (relative paths resolve against CWD; absolute paths are
+  supported).
+- The export includes the full TUI transcript (user messages, assistant output, tool/activity
+  cells), plus any in-progress output that hasn't been committed to history yet.
+
+Note: the output can contain secrets (commands, env, file contents). On Unix, the file is written
+with `0600` permissions.
+
 ## Local install (side-by-side)
 
 To keep your current `codex` and also have a second binary (for example `codex-best`) pointing at
