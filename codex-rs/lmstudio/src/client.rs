@@ -67,7 +67,9 @@ impl LMStudioClient {
 
         let request_body = serde_json::json!({
             "model": model,
-            "input": "",
+            // Some OpenAI-compatible servers (notably LM Studio) reject empty inputs.
+            // Use a tiny non-empty payload to trigger model load.
+            "input": "ping",
             "max_output_tokens": 1
         });
 

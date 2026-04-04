@@ -1499,7 +1499,10 @@ impl ChatComposer {
                     .find(|(command_name, _)| *command_name == name)
                 && matches!(
                     cmd,
-                    SlashCommand::Collab | SlashCommand::Review | SlashCommand::Save
+                    SlashCommand::Collab
+                        | SlashCommand::Review
+                        | SlashCommand::Save
+                        | SlashCommand::Context
                 )
             {
                 self.textarea.set_text("");

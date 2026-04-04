@@ -1,0 +1,12 @@
+---
+source: tui/src/context_dashboard.rs
+expression: lines_to_plain_text(&lines)
+---
+Next request (est): 149K tok  input 140K  57% of 258K  updated 12:00:00
+Tip: /context <block-id> to inspect, /context disable <block-id> to exclude future turns.
+
+REQ  INSTR  instructions      7K tok [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  Base/system prompt for model `gpt-5.2`.
+REQ  TOOLS  tools      2K tok [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  12 tool(s) available for this turn.
+REQ  SETUP  setup      9K tok [█░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  Developer permissions, user instructions, and environment context injected by Codex.
+ON    TURN  turn:1     80K tok [█████████░░░░░░░░░░░░░░░░░░░░░]  Write a tiny Rust program
+OFF   TURN  turn:2     60K tok [██████░░░░░░░░░░░░░░░░░░░░░░░░]  Fix the failing test

@@ -245,6 +245,21 @@ pub enum Op {
 
     /// Request the list of available models.
     ListModels,
+
+    /// Request a structured overview of what Codex will send as context in the next model request.
+    ///
+    /// This is intended for UIs such as `/context` dashboards.
+    GetContextOverview,
+
+    /// Enable or disable a single context block by id.
+    ///
+    /// Disabling blocks affects *future* model requests; it never deletes data.
+    SetContextBlockEnabled { block_id: String, enabled: bool },
+
+    /// Request full details for a single context block by id.
+    ///
+    /// Reply is delivered via `EventMsg::ContextBlockDetail`.
+    GetContextBlockDetail { block_id: String },
 }
 
 /// Determines the conditions under which the user is consulted to approve
@@ -654,6 +669,12 @@ pub enum EventMsg {
     /// Optional means unknown — UIs should not display when `None`.
     TokenCount(TokenCountEvent),
 
+    /// Structured snapshot of what will be sent as context in the next request.
+    ContextOverview(ContextOverviewEvent),
+
+    /// Full detail payload for a single context block.
+    ContextBlockDetail(ContextBlockDetailEvent),
+
     /// Agent text output message
     AgentMessage(AgentMessageEvent),
 
@@ -1025,6 +1046,60 @@ pub struct WarningEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ContextCompactedEvent;
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum ContextBlockKind {
+    Instructions,
+    Tools,
+    Setup,
+    Update,
+    Turn,
+    Misc,
+}
+
+/// One logical “block” of context that may be included/excluded from the next prompt.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct ContextBlockSummary {
+    pub id: String,
+    pub kind: ContextBlockKind,
+    pub title: String,
+    /// One-line human description.
+    pub description: String,
+    /// Whether this block is currently included in the next request.
+    pub enabled: bool,
+    /// Whether this block is mandatory (cannot be disabled).
+    pub required: bool,
+    /// Approximate token estimate for this block’s contribution.
+    #[ts(type = "number")]
+    pub token_estimate: i64,
+    /// Number of `ResponseItem`s inside this block (0 for synthetic blocks like `instructions`).
+    #[ts(type = "number")]
+    pub item_count: u32,
+}
+
+/// Snapshot of the next-request context composition.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ContextOverviewEvent {
+    pub blocks: Vec<ContextBlockSummary>,
+    /// Estimated tokens for the next request’s `input` list (after block filtering).
+    #[ts(type = "number")]
+    pub estimated_next_input_tokens: i64,
+    /// Estimated total tokens for the next request payload (instructions + tools + input).
+    #[ts(type = "number")]
+    pub estimated_next_total_tokens: i64,
+    /// Model context window in tokens (when known).
+    #[ts(type = "number | null")]
+    pub model_context_window: Option<i64>,
+}
+
+/// Full detail payload for one context block.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ContextBlockDetailEvent {
+    pub block: ContextBlockSummary,
+    pub items: Vec<ResponseItem>,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnCompleteEvent {

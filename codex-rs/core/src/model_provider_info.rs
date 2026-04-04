@@ -266,7 +266,9 @@ pub const DEFAULT_LMSTUDIO_PORT: u16 = 1234;
 pub const DEFAULT_OLLAMA_PORT: u16 = 11434;
 
 pub const LMSTUDIO_OSS_PROVIDER_ID: &str = "lmstudio";
+pub const LMSTUDIO_OSS_RESPONSES_PROVIDER_ID: &str = "lmstudio-responses";
 pub const OLLAMA_OSS_PROVIDER_ID: &str = "ollama";
+pub const OLLAMA_OSS_RESPONSES_PROVIDER_ID: &str = "ollama-responses";
 pub const OLLAMA_CHAT_PROVIDER_ID: &str = "ollama-chat";
 
 /// Built-in default provider list.
@@ -281,14 +283,22 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
         ("openai", P::create_openai_provider()),
         (
             OLLAMA_OSS_PROVIDER_ID,
-            create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Responses),
+            create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Chat),
         ),
         (
             OLLAMA_CHAT_PROVIDER_ID,
             create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Chat),
         ),
         (
+            OLLAMA_OSS_RESPONSES_PROVIDER_ID,
+            create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Responses),
+        ),
+        (
             LMSTUDIO_OSS_PROVIDER_ID,
+            create_oss_provider(DEFAULT_LMSTUDIO_PORT, WireApi::Chat),
+        ),
+        (
+            LMSTUDIO_OSS_RESPONSES_PROVIDER_ID,
             create_oss_provider(DEFAULT_LMSTUDIO_PORT, WireApi::Responses),
         ),
     ]

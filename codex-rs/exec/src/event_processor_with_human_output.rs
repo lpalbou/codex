@@ -588,6 +588,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::TerminalInteraction(_)
             | EventMsg::ExecCommandOutputDelta(_)
             | EventMsg::GetHistoryEntryResponse(_)
+            | EventMsg::ContextOverview(_)
+            | EventMsg::ContextBlockDetail(_)
             | EventMsg::McpListToolsResponse(_)
             | EventMsg::ListCustomPromptsResponse(_)
             | EventMsg::ListSkillsResponse(_)

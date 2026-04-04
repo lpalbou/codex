@@ -107,6 +107,12 @@ pub struct Cli {
     #[arg(long = "no-alt-screen", default_value_t = false)]
     pub no_alt_screen: bool,
 
+    /// Allow showing the model migration prompt on startup (opt-in).
+    ///
+    /// By default, Codex suppresses this prompt and continues using the current model.
+    #[arg(long = "allow-migration-prompt", default_value_t = false)]
+    pub allow_migration_prompt: bool,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }
@@ -136,6 +142,7 @@ impl From<codex_tui::Cli> for Cli {
             web_search: cli.web_search,
             add_dir: cli.add_dir,
             no_alt_screen: cli.no_alt_screen,
+            allow_migration_prompt: cli.allow_migration_prompt,
             config_overrides: cli.config_overrides,
         }
     }

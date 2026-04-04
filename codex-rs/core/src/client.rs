@@ -266,7 +266,13 @@ impl ModelClientSession {
         let model_info = self.state.model_info.clone();
         let instructions = prompt.get_full_instructions(&model_info).into_owned();
         let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
-        Ok(build_api_prompt(prompt, instructions, tools_json))
+        let mut api_prompt = build_api_prompt(prompt, instructions, tools_json);
+        if self.state.provider.name == "gpt-oss" {
+            api_prompt
+                .input
+                .retain(|item| !matches!(item, ResponseItem::Reasoning { .. }));
+        }
+        Ok(api_prompt)
     }
 
     fn build_responses_options(
@@ -314,10 +320,16 @@ impl ModelClientSession {
         let text = create_text_param_for_request(verbosity, &prompt.output_schema);
         let conversation_id = self.state.conversation_id.to_string();
 
+        let prompt_cache_key = if self.state.provider.name == "gpt-oss" {
+            None
+        } else {
+            Some(conversation_id.clone())
+        };
+
         ApiResponsesOptions {
             reasoning,
             include,
-            prompt_cache_key: Some(conversation_id.clone()),
+            prompt_cache_key,
             text,
             store_override: None,
             conversation_id: Some(conversation_id),

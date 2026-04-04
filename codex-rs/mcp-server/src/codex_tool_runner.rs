@@ -360,6 +360,8 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::ExitedReviewMode(_)
                     | EventMsg::ContextCompacted(_)
                     | EventMsg::ThreadRolledBack(_)
+                    | EventMsg::ContextOverview(_)
+                    | EventMsg::ContextBlockDetail(_)
                     | EventMsg::CollabAgentSpawnBegin(_)
                     | EventMsg::CollabAgentSpawnEnd(_)
                     | EventMsg::CollabAgentInteractionBegin(_)

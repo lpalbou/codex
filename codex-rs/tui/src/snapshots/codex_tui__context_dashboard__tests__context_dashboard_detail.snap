@@ -1,0 +1,12 @@
+---
+source: tui/src/context_dashboard.rs
+expression: lines_to_plain_text(&lines)
+---
+Block: Turn 1  (turn:1)
+Status: enabled  kind TURN  items 3  tokens 10K
+Write a tiny Rust program
+
+Items:
+   0. message (user): hello world
+   1. function_call shell {"cmd":"echo hi"}
+   2. function_output call_1: hi

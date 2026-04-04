@@ -136,6 +136,7 @@ use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::collab;
+use crate::context_dashboard::ContextOverlayView;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
@@ -2104,6 +2105,12 @@ impl ChatWidget {
             SlashCommand::Status => {
                 self.add_status_output();
             }
+            SlashCommand::Context => {
+                self.app_event_tx.send(AppEvent::OpenContextOverlay {
+                    view: ContextOverlayView::Overview,
+                });
+                self.submit_op(Op::GetContextOverview);
+            }
             SlashCommand::Save => {
                 self.app_event_tx.send(AppEvent::SaveTranscript {
                     filename: None,
@@ -2234,6 +2241,77 @@ impl ChatWidget {
                             "off"
                         };
                         self.add_info_message(format!("Collab is {state}."), None);
+                    }
+                }
+            }
+            SlashCommand::Context => {
+                if trimmed.is_empty() {
+                    self.dispatch_command(cmd);
+                    return;
+                }
+
+                let first = trimmed.split_whitespace().next().unwrap_or_default();
+                let rest = trimmed[first.len()..].trim();
+
+                match first.to_ascii_lowercase().as_str() {
+                    "list" | "overview" => {
+                        self.dispatch_command(SlashCommand::Context);
+                    }
+                    "enable" | "on" | "true" => {
+                        if rest.is_empty() {
+                            self.add_error_message(
+                                "Missing block id. Try '/context enable turn:3'.".to_string(),
+                            );
+                            return;
+                        }
+                        self.app_event_tx.send(AppEvent::OpenContextOverlay {
+                            view: ContextOverlayView::Overview,
+                        });
+                        self.submit_op(Op::SetContextBlockEnabled {
+                            block_id: rest.to_string(),
+                            enabled: true,
+                        });
+                    }
+                    "disable" | "off" | "false" => {
+                        if rest.is_empty() {
+                            self.add_error_message(
+                                "Missing block id. Try '/context disable turn:3'.".to_string(),
+                            );
+                            return;
+                        }
+                        self.app_event_tx.send(AppEvent::OpenContextOverlay {
+                            view: ContextOverlayView::Overview,
+                        });
+                        self.submit_op(Op::SetContextBlockEnabled {
+                            block_id: rest.to_string(),
+                            enabled: false,
+                        });
+                    }
+                    "show" | "detail" | "inspect" => {
+                        if rest.is_empty() {
+                            self.add_error_message(
+                                "Missing block id. Try '/context turn:3'.".to_string(),
+                            );
+                            return;
+                        }
+                        self.app_event_tx.send(AppEvent::OpenContextOverlay {
+                            view: ContextOverlayView::BlockDetail {
+                                block_id: rest.to_string(),
+                            },
+                        });
+                        self.submit_op(Op::GetContextBlockDetail {
+                            block_id: rest.to_string(),
+                        });
+                    }
+                    _ => {
+                        self.app_event_tx.send(AppEvent::OpenContextOverlay {
+                            view: ContextOverlayView::BlockDetail {
+                                block_id: trimmed.to_string(),
+                            },
+                        });
+                        self.submit_op(Op::GetContextBlockDetail {
+                            block_id: trimmed.to_string(),
+                        });
                     }
                 }
             }
@@ -2435,13 +2513,27 @@ impl ChatWidget {
             EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta })
             | EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
                 delta,
-            }) => self.on_agent_reasoning_delta(delta),
-            EventMsg::AgentReasoning(AgentReasoningEvent { .. }) => self.on_agent_reasoning_final(),
-            EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
-                self.on_agent_reasoning_delta(text);
-                self.on_agent_reasoning_final();
+            }) => {
+                if !self.config.hide_agent_reasoning {
+                    self.on_agent_reasoning_delta(delta);
+                }
             }
-            EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
+            EventMsg::AgentReasoning(AgentReasoningEvent { .. }) => {
+                if !self.config.hide_agent_reasoning {
+                    self.on_agent_reasoning_final();
+                }
+            }
+            EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
+                if !self.config.hide_agent_reasoning {
+                    self.on_agent_reasoning_delta(text);
+                    self.on_agent_reasoning_final();
+                }
+            }
+            EventMsg::AgentReasoningSectionBreak(_) => {
+                if !self.config.hide_agent_reasoning {
+                    self.on_reasoning_section_break();
+                }
+            }
             EventMsg::TurnStarted(_) => self.on_task_started(),
             EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
                 self.on_task_complete(last_agent_message)
@@ -2450,6 +2542,7 @@ impl ChatWidget {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);
             }
+            EventMsg::ContextOverview(_) | EventMsg::ContextBlockDetail(_) => {}
             EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
             EventMsg::Error(ErrorEvent { message, .. }) => self.on_error(message),
             EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),

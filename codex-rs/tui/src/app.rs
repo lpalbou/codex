@@ -11,6 +11,8 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
+use crate::context_dashboard::ContextDashboard;
+use crate::context_dashboard::ContextDashboardRenderable;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::external_editor;
@@ -217,8 +219,13 @@ async fn handle_model_migration_prompt_if_needed(
     config: &mut Config,
     model: &str,
     app_event_tx: &AppEventSender,
+    allow_migration_prompt: bool,
     available_models: Vec<ModelPreset>,
 ) -> Option<AppExitInfo> {
+    if !allow_migration_prompt {
+        return None;
+    }
+
     let upgrade = available_models
         .iter()
         .find(|preset| preset.model == model)
@@ -357,6 +364,7 @@ pub(crate) struct App {
     // TODO(jif) drop once new UX is here.
     // Track external agent approvals spawned via AgentControl.
     pub(crate) agents_dashboard: Arc<Mutex<AgentsDashboard>>,
+    pub(crate) context_dashboard: Arc<Mutex<ContextDashboard>>,
     /// Map routed approval IDs to their originating external threads and original IDs.
     external_approval_routes: HashMap<String, (ThreadId, String)>,
     /// Buffered Codex events while external approvals are pending.
@@ -383,6 +391,7 @@ impl App {
         session_selection: SessionSelection,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
+        allow_migration_prompt: bool,
         ollama_chat_support_notice: Option<DeprecationNoticeEvent>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
@@ -410,6 +419,7 @@ impl App {
                 &mut config,
                 model.as_str(),
                 &app_event_tx,
+                allow_migration_prompt,
                 available_models,
             )
             .await;
@@ -515,6 +525,7 @@ impl App {
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
             agents_dashboard: Arc::new(Mutex::new(AgentsDashboard::default())),
+            context_dashboard: Arc::new(Mutex::new(ContextDashboard::default())),
             external_approval_routes: HashMap::new(),
             paused_codex_events: VecDeque::new(),
         };
@@ -900,6 +911,20 @@ impl App {
                         }
                     }
                 }
+                if matches!(
+                    &event.msg,
+                    EventMsg::ContextOverview(_) | EventMsg::ContextBlockDetail(_)
+                ) && let Ok(mut dashboard) = self.context_dashboard.lock()
+                {
+                    match &event.msg {
+                        EventMsg::ContextOverview(ev) => dashboard.on_overview(ev),
+                        EventMsg::ContextBlockDetail(ev) => dashboard.on_block_detail(ev),
+                        _ => {}
+                    }
+                    if self.overlay.is_some() {
+                        tui.frame_requester().schedule_frame();
+                    }
+                }
                 if !self.external_approval_routes.is_empty() {
                     // Store the events while the approval is pending.
                     self.paused_codex_events.push_back(event);
@@ -1083,6 +1108,19 @@ impl App {
                         self.config.features.enabled(Feature::Collab),
                     ))],
                     "A G E N T S".to_string(),
+                ));
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenContextOverlay { view } => {
+                let _ = tui.enter_alt_screen();
+                if let Ok(mut dashboard) = self.context_dashboard.lock() {
+                    dashboard.set_view(view);
+                }
+                self.overlay = Some(Overlay::new_static_with_renderables(
+                    vec![Box::new(ContextDashboardRenderable::new(Arc::clone(
+                        &self.context_dashboard,
+                    )))],
+                    "C O N T E X T".to_string(),
                 ));
                 tui.frame_requester().schedule_frame();
             }
@@ -2003,6 +2041,7 @@ mod tests {
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
             agents_dashboard: Arc::new(Mutex::new(AgentsDashboard::default())),
+            context_dashboard: Arc::new(Mutex::new(ContextDashboard::default())),
             external_approval_routes: HashMap::new(),
             paused_codex_events: VecDeque::new(),
         }
@@ -2046,6 +2085,7 @@ mod tests {
                 suppress_shutdown_complete: false,
                 skip_world_writable_scan_once: false,
                 agents_dashboard: Arc::new(Mutex::new(AgentsDashboard::default())),
+                context_dashboard: Arc::new(Mutex::new(ContextDashboard::default())),
                 external_approval_routes: HashMap::new(),
                 paused_codex_events: VecDeque::new(),
             },

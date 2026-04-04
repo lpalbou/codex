@@ -123,6 +123,12 @@ pub struct Cli {
     #[arg(long = "no-alt-screen", default_value_t = false)]
     pub no_alt_screen: bool,
 
+    /// Allow showing the model migration prompt on startup (opt-in).
+    ///
+    /// By default, Codex suppresses this prompt and continues using the current model.
+    #[arg(long = "allow-migration-prompt", default_value_t = false)]
+    pub allow_migration_prompt: bool,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }

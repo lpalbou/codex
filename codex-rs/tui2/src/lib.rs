@@ -239,6 +239,7 @@ pub async fn run_main(
         developer_instructions: None,
         compact_prompt: None,
         include_apply_patch_tool: None,
+        hide_agent_reasoning: cli.oss.then_some(true),
         show_raw_agent_reasoning: cli.oss.then_some(true),
         tools_web_search_request: None,
         additional_writable_roots: additional_dirs,
@@ -592,6 +593,7 @@ async fn run_ratatui_app(
         prompt,
         images,
         no_alt_screen,
+        allow_migration_prompt,
         ..
     } = cli;
 
@@ -633,6 +635,7 @@ async fn run_ratatui_app(
         session_selection,
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
+        allow_migration_prompt,
         ollama_chat_support_notice,
     )
     .await;

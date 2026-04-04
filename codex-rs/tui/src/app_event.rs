@@ -18,6 +18,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 
 use crate::bottom_pane::ApprovalRequest;
+use crate::context_dashboard::ContextOverlayView;
 use crate::history_cell::HistoryCell;
 
 use codex_core::features::Feature;
@@ -106,6 +107,11 @@ pub(crate) enum AppEvent {
 
     /// Open a live agents dashboard (spawned sub-agents).
     OpenAgentsOverlay,
+
+    /// Open the `/context` dashboard overlay.
+    OpenContextOverlay {
+        view: ContextOverlayView,
+    },
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 

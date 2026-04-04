@@ -1158,6 +1158,7 @@ pub struct ConfigOverrides {
     pub developer_instructions: Option<String>,
     pub compact_prompt: Option<String>,
     pub include_apply_patch_tool: Option<bool>,
+    pub hide_agent_reasoning: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
     /// Additional directories that should be treated as writable roots for this session.
@@ -1245,6 +1246,7 @@ impl Config {
             developer_instructions,
             compact_prompt,
             include_apply_patch_tool: include_apply_patch_tool_override,
+            hide_agent_reasoning,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
             additional_writable_roots,
@@ -1517,7 +1519,10 @@ impl Config {
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_linux_sandbox_exe,
 
-            hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
+            hide_agent_reasoning: cfg
+                .hide_agent_reasoning
+                .or(hide_agent_reasoning)
+                .unwrap_or(false),
             show_raw_agent_reasoning: cfg
                 .show_raw_agent_reasoning
                 .or(show_raw_agent_reasoning)

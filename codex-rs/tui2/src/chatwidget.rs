@@ -2140,13 +2140,27 @@ impl ChatWidget {
             EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta })
             | EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
                 delta,
-            }) => self.on_agent_reasoning_delta(delta),
-            EventMsg::AgentReasoning(AgentReasoningEvent { .. }) => self.on_agent_reasoning_final(),
-            EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
-                self.on_agent_reasoning_delta(text);
-                self.on_agent_reasoning_final();
+            }) => {
+                if !self.config.hide_agent_reasoning {
+                    self.on_agent_reasoning_delta(delta);
+                }
             }
-            EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
+            EventMsg::AgentReasoning(AgentReasoningEvent { .. }) => {
+                if !self.config.hide_agent_reasoning {
+                    self.on_agent_reasoning_final();
+                }
+            }
+            EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
+                if !self.config.hide_agent_reasoning {
+                    self.on_agent_reasoning_delta(text);
+                    self.on_agent_reasoning_final();
+                }
+            }
+            EventMsg::AgentReasoningSectionBreak(_) => {
+                if !self.config.hide_agent_reasoning {
+                    self.on_reasoning_section_break();
+                }
+            }
             EventMsg::TurnStarted(_) => self.on_task_started(),
             EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
                 self.on_task_complete(last_agent_message)
@@ -2155,6 +2169,7 @@ impl ChatWidget {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);
             }
+            EventMsg::ContextOverview(_) | EventMsg::ContextBlockDetail(_) => {}
             EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
             EventMsg::Error(ErrorEvent { message, .. }) => self.on_error(message),
             EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),

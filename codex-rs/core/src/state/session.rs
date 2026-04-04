@@ -1,5 +1,7 @@
 //! Session-wide mutable state.
 
+use std::collections::HashSet;
+
 use codex_protocol::models::ResponseItem;
 
 use crate::codex::SessionConfiguration;
@@ -14,6 +16,7 @@ pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
+    pub(crate) disabled_context_block_ids: HashSet<String>,
 }
 
 impl SessionState {
@@ -24,6 +27,7 @@ impl SessionState {
             session_configuration,
             history,
             latest_rate_limits: None,
+            disabled_context_block_ids: HashSet::new(),
         }
     }
 

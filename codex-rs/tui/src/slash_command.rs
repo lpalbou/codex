@@ -28,6 +28,7 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
+    Context,
     Save,
     Agents,
     Collab,
@@ -58,6 +59,7 @@ impl SlashCommand {
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::Context => "inspect and control what context is sent next",
             SlashCommand::Save => "save chat history to a markdown file",
             SlashCommand::Agents => "show live sub-agent dashboard",
             SlashCommand::Collab => "toggle sub-agent tools on/off (collab)",
@@ -99,6 +101,7 @@ impl SlashCommand {
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Status
+            | SlashCommand::Context
             | SlashCommand::Save
             | SlashCommand::Agents
             | SlashCommand::Ps

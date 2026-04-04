@@ -55,7 +55,7 @@ impl<'a> ChatRequestBuilder<'a> {
         self
     }
 
-    pub fn build(self, _provider: &Provider) -> Result<ChatRequest, ApiError> {
+    pub fn build(self, provider: &Provider) -> Result<ChatRequest, ApiError> {
         let mut messages = Vec::<Value>::new();
         messages.push(json!({"role": "system", "content": self.instructions}));
 
@@ -152,6 +152,11 @@ impl<'a> ChatRequestBuilder<'a> {
         for (idx, item) in input.iter().enumerate() {
             match item {
                 ResponseItem::Message { role, content, .. } => {
+                    let role = if provider.name == "gpt-oss" && role == "developer" {
+                        "system"
+                    } else {
+                        role.as_str()
+                    };
                     let mut text = String::new();
                     let mut items: Vec<Value> = Vec::new();
                     let mut saw_image = false;
@@ -291,6 +296,15 @@ impl<'a> ChatRequestBuilder<'a> {
             }
         }
 
+        // Some OSS model chat templates (notably Qwen family templates as shipped in LM Studio)
+        // expect at most one system message. Codex builds multiple "system" messages (base
+        // instructions + permissions + optional extra developer instructions). When running
+        // against OSS backends, merge the leading system messages into a single one for
+        // compatibility.
+        if provider.name == "gpt-oss" {
+            merge_leading_system_messages(&mut messages);
+        }
+
         let payload = json!({
             "model": self.model,
             "messages": messages,
@@ -307,6 +321,63 @@ impl<'a> ChatRequestBuilder<'a> {
             body: payload,
             headers,
         })
+    }
+}
+
+fn merge_leading_system_messages(messages: &mut Vec<Value>) {
+    let mut system_texts: Vec<String> = Vec::new();
+    let mut system_count = 0usize;
+    for msg in messages.iter() {
+        let is_system = msg
+            .get("role")
+            .and_then(Value::as_str)
+            .is_some_and(|role| role == "system");
+        if !is_system {
+            break;
+        }
+        if let Some(content) = msg.get("content")
+            && let Some(text) = extract_text_from_message_content(content)
+        {
+            system_texts.push(text);
+        }
+        system_count += 1;
+    }
+
+    if system_count <= 1 {
+        return;
+    }
+
+    let merged = system_texts.join("\n\n");
+    if let Some(first) = messages.first_mut()
+        && let Some(obj) = first.as_object_mut()
+    {
+        obj.insert("content".to_string(), Value::String(merged));
+    }
+
+    messages.drain(1..system_count);
+}
+
+fn extract_text_from_message_content(value: &Value) -> Option<String> {
+    match value {
+        Value::String(s) => Some(s.clone()),
+        Value::Array(parts) => {
+            let mut out = String::new();
+            for part in parts {
+                let Some(part_obj) = part.as_object() else {
+                    continue;
+                };
+                if part_obj
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|ty| ty == "text")
+                    && let Some(text) = part_obj.get("text").and_then(Value::as_str)
+                {
+                    out.push_str(text);
+                }
+            }
+            if out.is_empty() { None } else { Some(out) }
+        }
+        _ => None,
     }
 }
 
@@ -378,6 +449,24 @@ mod tests {
         }
     }
 
+    fn oss_provider() -> Provider {
+        Provider {
+            name: "gpt-oss".to_string(),
+            base_url: "http://localhost:1234/v1".to_string(),
+            query_params: None,
+            wire: WireApi::Chat,
+            headers: HeaderMap::new(),
+            retry: RetryConfig {
+                max_attempts: 1,
+                base_delay: Duration::from_millis(10),
+                retry_429: false,
+                retry_5xx: true,
+                retry_transport: true,
+            },
+            stream_idle_timeout: Duration::from_secs(1),
+        }
+    }
+
     #[test]
     fn attaches_conversation_and_subagent_headers() {
         let prompt_input = vec![ResponseItem::Message {
@@ -401,6 +490,40 @@ mod tests {
             req.headers.get("x-openai-subagent"),
             Some(&HeaderValue::from_static("review"))
         );
+    }
+
+    #[test]
+    fn gpt_oss_merges_leading_system_messages() {
+        let prompt_input = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "<permissions instructions>...</permissions instructions>".to_string(),
+                }],
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "hi".to_string(),
+                }],
+            },
+        ];
+
+        let req = ChatRequestBuilder::new("gpt-test", "BASE", &prompt_input, &[])
+            .build(&oss_provider())
+            .expect("request");
+
+        let messages = req.body["messages"].as_array().expect("messages");
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(
+            messages[0]["content"],
+            "BASE\n\n<permissions instructions>...</permissions instructions>"
+        );
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[1]["content"], "hi");
     }
 
     #[test]

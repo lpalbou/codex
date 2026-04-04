@@ -2,9 +2,11 @@
 
 Open Codex Unleashed supports local, OpenAI-compatible servers via built-in providers:
 
-- `lmstudio` (Responses wire API)
-- `ollama` (Responses wire API)
-- `ollama-chat` (Chat Completions wire API)
+- `lmstudio` (Chat Completions wire API)
+- `lmstudio-responses` (Responses wire API)
+- `ollama` (Chat Completions wire API)
+- `ollama-responses` (Responses wire API)
+- `ollama-chat` (Chat Completions wire API; legacy alias)
 
 ## Quick start
 
@@ -18,6 +20,11 @@ codex-unleashed --provider ollama --model qwen2.5-coder:7b
 
 ```sh
 codex-unleashed --provider <lmstudio|ollama|ollama-chat> --model <MODEL> [--base-url <URL>]
+```
+Also supported:
+
+```sh
+codex-unleashed --provider <lmstudio-responses|ollama-responses> --model <MODEL> [--base-url <URL>]
 ```
 
 If `--base-url` is omitted, Codex uses the provider defaults:
@@ -43,4 +50,3 @@ codex-unleashed --provider lmstudio --base-url http://localhost:1234/v1 --model 
 - `codex-rs/tui/src/lib.rs`: applies provider/base-url overrides by setting `OPENAI_BASE_URL` or
   `CODEX_OSS_BASE_URL` early in startup.
 - Provider defaults: `codex-rs/core/src/model_provider_info.rs`.
-

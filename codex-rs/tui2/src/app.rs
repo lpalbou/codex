@@ -248,8 +248,13 @@ async fn handle_model_migration_prompt_if_needed(
     config: &mut Config,
     model: &str,
     app_event_tx: &AppEventSender,
+    allow_migration_prompt: bool,
     available_models: Vec<ModelPreset>,
 ) -> Option<AppExitInfo> {
+    if !allow_migration_prompt {
+        return None;
+    }
+
     let upgrade = available_models
         .iter()
         .find(|preset| preset.model == model)
@@ -437,6 +442,7 @@ impl App {
         session_selection: SessionSelection,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
+        allow_migration_prompt: bool,
         ollama_chat_support_notice: Option<DeprecationNoticeEvent>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
@@ -462,6 +468,7 @@ impl App {
             &mut config,
             model.as_str(),
             &app_event_tx,
+            allow_migration_prompt,
             available_models,
         )
         .await;

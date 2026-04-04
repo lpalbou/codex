@@ -141,14 +141,20 @@ impl AgentMessageItem {
     }
 
     pub fn as_legacy_events(&self) -> Vec<EventMsg> {
-        self.content
-            .iter()
-            .map(|c| match c {
-                AgentMessageContent::Text { text } => EventMsg::AgentMessage(AgentMessageEvent {
-                    message: text.clone(),
-                }),
-            })
-            .collect()
+        let mut combined = String::new();
+        for content in &self.content {
+            match content {
+                AgentMessageContent::Text { text } => combined.push_str(text),
+            }
+        }
+
+        if combined.trim().is_empty() {
+            Vec::new()
+        } else {
+            vec![EventMsg::AgentMessage(AgentMessageEvent {
+                message: combined,
+            })]
+        }
     }
 }
 
@@ -162,11 +168,13 @@ impl ReasoningItem {
         }
 
         if show_raw_agent_reasoning {
+            let mut combined = String::new();
             for entry in &self.raw_content {
+                combined.push_str(entry);
+            }
+            if !combined.trim().is_empty() {
                 events.push(EventMsg::AgentReasoningRawContent(
-                    AgentReasoningRawContentEvent {
-                        text: entry.clone(),
-                    },
+                    AgentReasoningRawContentEvent { text: combined },
                 ));
             }
         }

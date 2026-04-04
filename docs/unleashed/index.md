@@ -9,6 +9,7 @@ If you’re looking for upstream docs, start in `docs/` or the upstream reposito
 
 - Install (side-by-side): `docs/unleashed/installation.md`
 - Model & reasoning control: `docs/unleashed/model-control.md`
+- Context internals + `/context` dashboard: `docs/unleashed/context.md`
 - Local models (LM Studio / Ollama): `docs/unleashed/local-models.md`
 - Sub-agents observability (`/agents`): `docs/unleashed/agents-dashboard.md`
 - Exporting transcripts (`/save`): `docs/unleashed/save.md`
@@ -24,4 +25,3 @@ Open Codex Unleashed is forked from OpenAI’s Codex CLI:
 
 - Upstream repo: https://github.com/openai/codex
 - Docs: https://developers.openai.com/codex
-

@@ -48,6 +48,7 @@ mod cli;
 mod clipboard_paste;
 mod collab;
 mod color;
+mod context_dashboard;
 pub mod custom_terminal;
 mod diff_render;
 mod exec_cell;
@@ -267,6 +268,7 @@ pub async fn run_main(
         model_provider: model_provider_override.clone(),
         config_profile: cli.config_profile.clone(),
         codex_linux_sandbox_exe,
+        hide_agent_reasoning: force_oss_provider.then_some(true),
         show_raw_agent_reasoning: force_oss_provider.then_some(true),
         additional_writable_roots: additional_dirs,
         ..Default::default()
@@ -620,6 +622,7 @@ async fn run_ratatui_app(
         prompt,
         images,
         no_alt_screen,
+        allow_migration_prompt,
         ..
     } = cli;
 
@@ -636,6 +639,7 @@ async fn run_ratatui_app(
         session_selection,
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
+        allow_migration_prompt,
         ollama_chat_support_notice,
     )
     .await;

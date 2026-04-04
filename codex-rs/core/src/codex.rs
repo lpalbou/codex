@@ -205,6 +205,10 @@ fn maybe_push_chat_wire_api_deprecation(
         return;
     }
 
+    if !config.model_provider.is_openai() {
+        return;
+    }
+
     if CHAT_WIRE_API_DEPRECATION_EMITTED
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
@@ -1442,6 +1446,15 @@ impl Session {
         state.clone_history()
     }
 
+    pub(crate) async fn build_prompt_input(&self) -> Vec<ResponseItem> {
+        let history_items = self.clone_history().await.for_prompt();
+        let disabled_block_ids = {
+            let state = self.state.lock().await;
+            state.disabled_context_block_ids.clone()
+        };
+        crate::context_blocks::filter_items_for_prompt(history_items, &disabled_block_ids)
+    }
+
     pub(crate) async fn update_token_usage_info(
         &self,
         turn_context: &TurnContext,
@@ -1888,6 +1901,15 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::ListSkills { cwds, force_reload } => {
                 handlers::list_skills(&sess, sub.id.clone(), cwds, force_reload).await;
             }
+            Op::GetContextOverview => {
+                handlers::get_context_overview(&sess, sub.id.clone()).await;
+            }
+            Op::SetContextBlockEnabled { block_id, enabled } => {
+                handlers::set_context_block_enabled(&sess, sub.id.clone(), block_id, enabled).await;
+            }
+            Op::GetContextBlockDetail { block_id } => {
+                handlers::get_context_block_detail(&sess, sub.id.clone(), block_id).await;
+            }
             Op::Undo => {
                 handlers::undo(&sess, sub.id.clone()).await;
             }
@@ -1960,6 +1982,7 @@ mod handlers {
     use codex_protocol::protocol::WarningEvent;
 
     use crate::context_manager::is_user_turn_boundary;
+    use codex_protocol::models::ResponseItem;
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
@@ -2265,6 +2288,279 @@ mod handlers {
             msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent { skills }),
         };
         sess.send_event_raw(event).await;
+    }
+
+    pub async fn get_context_overview(sess: &Session, sub_id: String) {
+        let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
+        let model_info = turn_context.client.get_model_info();
+        let model_slug = model_info.slug.as_str();
+        let instructions = turn_context
+            .base_instructions
+            .as_deref()
+            .unwrap_or(model_info.base_instructions.as_str());
+        let instructions_tokens =
+            i64::try_from(crate::truncate::approx_token_count(instructions)).unwrap_or(i64::MAX);
+
+        let (tools_count, tools_tokens) = estimate_tools_summary(sess, turn_context.as_ref()).await;
+
+        let disabled_block_ids = {
+            let state = sess.state.lock().await;
+            state.disabled_context_block_ids.clone()
+        };
+
+        let history_items = sess.clone_history().await.for_prompt();
+        let history_blocks = crate::context_blocks::build_history_blocks(
+            history_items.as_slice(),
+            &disabled_block_ids,
+        );
+
+        let filtered_items =
+            crate::context_blocks::filter_items_for_prompt(history_items, &disabled_block_ids);
+        let estimated_next_input_tokens =
+            crate::context_blocks::estimate_items_tokens(filtered_items.as_slice());
+
+        let mut blocks = Vec::with_capacity(history_blocks.len().saturating_add(2));
+        blocks.push(codex_protocol::protocol::ContextBlockSummary {
+            id: "instructions".to_string(),
+            kind: codex_protocol::protocol::ContextBlockKind::Instructions,
+            title: "Instructions".to_string(),
+            description: format!("Base/system prompt for model `{model_slug}`."),
+            enabled: true,
+            required: true,
+            token_estimate: instructions_tokens,
+            item_count: 0,
+        });
+        blocks.push(codex_protocol::protocol::ContextBlockSummary {
+            id: "tools".to_string(),
+            kind: codex_protocol::protocol::ContextBlockKind::Tools,
+            title: "Tools".to_string(),
+            description: format!("{tools_count} tool(s) available for this turn."),
+            enabled: true,
+            required: true,
+            token_estimate: tools_tokens,
+            item_count: 0,
+        });
+        blocks.extend(history_blocks.into_iter().map(|block| block.summary));
+
+        let estimated_next_total_tokens = instructions_tokens
+            .saturating_add(tools_tokens)
+            .saturating_add(estimated_next_input_tokens);
+
+        let event = Event {
+            id: sub_id,
+            msg: EventMsg::ContextOverview(codex_protocol::protocol::ContextOverviewEvent {
+                blocks,
+                estimated_next_input_tokens,
+                estimated_next_total_tokens,
+                model_context_window: turn_context.client.get_model_context_window(),
+            }),
+        };
+        sess.send_event_raw(event).await;
+    }
+
+    pub async fn set_context_block_enabled(
+        sess: &Session,
+        sub_id: String,
+        block_id: String,
+        enabled: bool,
+    ) {
+        let disabled_snapshot = {
+            let state = sess.state.lock().await;
+            state.disabled_context_block_ids.clone()
+        };
+        let history_items = sess.clone_history().await.for_prompt();
+        let blocks = crate::context_blocks::build_history_blocks(
+            history_items.as_slice(),
+            &disabled_snapshot,
+        );
+        let Some(target) = crate::context_blocks::find_block_by_id(&blocks, block_id.as_str())
+        else {
+            sess.send_event_raw(Event {
+                id: sub_id.clone(),
+                msg: EventMsg::Warning(WarningEvent {
+                    message: format!("Unknown context block id: `{block_id}`"),
+                }),
+            })
+            .await;
+            get_context_overview(sess, sub_id).await;
+            return;
+        };
+
+        if target.summary.required {
+            sess.send_event_raw(Event {
+                id: sub_id.clone(),
+                msg: EventMsg::Warning(WarningEvent {
+                    message: format!(
+                        "Context block `{block_id}` is required and cannot be disabled."
+                    ),
+                }),
+            })
+            .await;
+            get_context_overview(sess, sub_id).await;
+            return;
+        }
+
+        {
+            let mut state = sess.state.lock().await;
+            if enabled {
+                state.disabled_context_block_ids.remove(block_id.as_str());
+            } else {
+                state.disabled_context_block_ids.insert(block_id.clone());
+            }
+        }
+
+        get_context_overview(sess, sub_id).await;
+    }
+
+    pub async fn get_context_block_detail(sess: &Session, sub_id: String, block_id: String) {
+        let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
+        let model_info = turn_context.client.get_model_info();
+        let model_slug = model_info.slug.as_str();
+        let instructions = turn_context
+            .base_instructions
+            .as_deref()
+            .unwrap_or(model_info.base_instructions.as_str());
+        let instructions_tokens =
+            i64::try_from(crate::truncate::approx_token_count(instructions)).unwrap_or(i64::MAX);
+
+        let disabled_block_ids = {
+            let state = sess.state.lock().await;
+            state.disabled_context_block_ids.clone()
+        };
+
+        if block_id == "instructions" {
+            let block = codex_protocol::protocol::ContextBlockSummary {
+                id: "instructions".to_string(),
+                kind: codex_protocol::protocol::ContextBlockKind::Instructions,
+                title: "Instructions".to_string(),
+                description: format!("Base/system prompt for model `{model_slug}`."),
+                enabled: true,
+                required: true,
+                token_estimate: instructions_tokens,
+                item_count: 1,
+            };
+            let items = vec![ResponseItem::Message {
+                id: None,
+                role: "system".to_string(),
+                content: vec![codex_protocol::models::ContentItem::InputText {
+                    text: instructions.to_string(),
+                }],
+            }];
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::ContextBlockDetail(
+                    codex_protocol::protocol::ContextBlockDetailEvent { block, items },
+                ),
+            })
+            .await;
+            return;
+        }
+
+        if block_id == "tools" {
+            let (tools_count, tools_tokens, tool_names) =
+                build_tools_detail(sess, turn_context.as_ref()).await;
+            let block = codex_protocol::protocol::ContextBlockSummary {
+                id: "tools".to_string(),
+                kind: codex_protocol::protocol::ContextBlockKind::Tools,
+                title: "Tools".to_string(),
+                description: format!("{tools_count} tool(s) available for this turn."),
+                enabled: true,
+                required: true,
+                token_estimate: tools_tokens,
+                item_count: 1,
+            };
+            let text = if tool_names.is_empty() {
+                "No tools are configured for this turn.".to_string()
+            } else {
+                format!("Tools ({tools_count}):\n- {}", tool_names.join("\n- "))
+            };
+            let items = vec![ResponseItem::Message {
+                id: None,
+                role: "system".to_string(),
+                content: vec![codex_protocol::models::ContentItem::InputText { text }],
+            }];
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::ContextBlockDetail(
+                    codex_protocol::protocol::ContextBlockDetailEvent { block, items },
+                ),
+            })
+            .await;
+            return;
+        }
+
+        let history_items = sess.clone_history().await.for_prompt();
+        let blocks = crate::context_blocks::build_history_blocks(
+            history_items.as_slice(),
+            &disabled_block_ids,
+        );
+        let Some(target) = crate::context_blocks::find_block_by_id(&blocks, block_id.as_str())
+        else {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Warning(WarningEvent {
+                    message: format!("Unknown context block id: `{block_id}`"),
+                }),
+            })
+            .await;
+            return;
+        };
+
+        let (start, end) = target.range;
+        let items = history_items[start..end].to_vec();
+
+        let event = Event {
+            id: sub_id,
+            msg: EventMsg::ContextBlockDetail(codex_protocol::protocol::ContextBlockDetailEvent {
+                block: target.summary.clone(),
+                items,
+            }),
+        };
+        sess.send_event_raw(event).await;
+    }
+
+    async fn estimate_tools_summary(sess: &Session, turn_context: &TurnContext) -> (usize, i64) {
+        let (count, tokens, _) = build_tools_detail(sess, turn_context).await;
+        (count, tokens)
+    }
+
+    async fn build_tools_detail(
+        sess: &Session,
+        turn_context: &TurnContext,
+    ) -> (usize, i64, Vec<String>) {
+        let mcp_tools = sess
+            .services
+            .mcp_connection_manager
+            .read()
+            .await
+            .list_all_tools()
+            .await;
+        let router = crate::tools::router::ToolRouter::from_config(
+            &turn_context.tools_config,
+            Some(
+                mcp_tools
+                    .into_iter()
+                    .map(|(name, tool)| (name, tool.tool))
+                    .collect(),
+            ),
+        );
+        let specs = router.specs();
+        let count = specs.len();
+        let tool_names = specs
+            .iter()
+            .map(|spec| spec.name().to_string())
+            .collect::<Vec<_>>();
+
+        let tools_tokens =
+            crate::tools::spec::create_tools_json_for_responses_api(specs.as_slice())
+                .ok()
+                .and_then(|tools_json| serde_json::to_string(&tools_json).ok())
+                .and_then(|serialized| {
+                    i64::try_from(crate::truncate::approx_token_count(serialized.as_str())).ok()
+                })
+                .unwrap_or(0);
+
+        (count, tools_tokens, tool_names)
     }
 
     pub async fn undo(sess: &Arc<Session>, sub_id: String) {
@@ -2625,7 +2921,7 @@ pub(crate) async fn run_turn(
         let sampling_request_input: Vec<ResponseItem> = {
             sess.record_conversation_items(&turn_context, &pending_input)
                 .await;
-            sess.clone_history().await.for_prompt()
+            sess.build_prompt_input().await
         };
 
         let sampling_request_input_messages = sampling_request_input
