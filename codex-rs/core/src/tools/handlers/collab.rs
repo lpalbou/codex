@@ -3,6 +3,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::CodexErr;
+use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -20,13 +21,16 @@ use codex_protocol::protocol::CollabCloseBeginEvent;
 use codex_protocol::protocol::CollabCloseEndEvent;
 use codex_protocol::protocol::CollabWaitingBeginEvent;
 use codex_protocol::protocol::CollabWaitingEndEvent;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use serde::Deserialize;
 use serde::Serialize;
 
 pub struct CollabHandler;
 
-pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
-pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = 300_000;
+pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = 300_000;
+pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = 1_000;
+pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = 3_600_000;
 
 #[derive(Debug, Deserialize)]
 struct CloseAgentArgs {
@@ -65,6 +69,7 @@ impl ToolHandler for CollabHandler {
         match tool_name.as_str() {
             "spawn_agent" => spawn::handle(session, turn, call_id, arguments).await,
             "send_input" => send_input::handle(session, turn, call_id, arguments).await,
+            "list_agents" => list_agents::handle(session, arguments).await,
             "wait" => wait::handle(session, turn, call_id, arguments).await,
             "close_agent" => close_agent::handle(session, turn, call_id, arguments).await,
             other => Err(FunctionCallError::RespondToModel(format!(
@@ -115,14 +120,34 @@ mod spawn {
                 .into(),
             )
             .await;
+        let child_depth = turn.client.config().agent_spawn_depth.saturating_add(1);
+        if turn
+            .client
+            .config()
+            .agent_max_depth
+            .is_some_and(|max_depth| child_depth > max_depth)
+        {
+            return Err(FunctionCallError::RespondToModel(
+                "Agent depth limit reached. Solve the task yourself.".to_string(),
+            ));
+        }
         let mut config = build_agent_spawn_config(turn.as_ref())?;
         agent_role
             .apply_to_config(&mut config)
             .map_err(FunctionCallError::RespondToModel)?;
+        apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
+        apply_spawn_agent_overrides(&mut config, child_depth);
         let result = session
             .services
             .agent_control
-            .spawn_agent(config, prompt.clone())
+            .spawn_agent(
+                config,
+                prompt.clone(),
+                agent_role,
+                Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id: session.conversation_id,
+                })),
+            )
             .await
             .map_err(collab_spawn_error);
         let (new_thread_id, status) = match &result {
@@ -152,6 +177,47 @@ mod spawn {
         })
         .map_err(|err| {
             FunctionCallError::Fatal(format!("failed to serialize spawn_agent result: {err}"))
+        })?;
+
+        Ok(ToolOutput::Function {
+            content,
+            success: Some(true),
+            content_items: None,
+        })
+    }
+}
+
+mod list_agents {
+    use super::*;
+    use crate::agent::ListedAgent;
+    use std::sync::Arc;
+
+    #[derive(Debug, Default, Deserialize)]
+    struct ListAgentsArgs {}
+
+    #[derive(Debug, Serialize)]
+    struct ListAgentsResult {
+        current_thread_id: ThreadId,
+        agents: Vec<ListedAgent>,
+    }
+
+    pub async fn handle(
+        session: Arc<Session>,
+        arguments: String,
+    ) -> Result<ToolOutput, FunctionCallError> {
+        let _: ListAgentsArgs = parse_arguments(&arguments)?;
+        let agents = session
+            .services
+            .agent_control
+            .list_agents()
+            .await
+            .map_err(collab_spawn_error)?;
+        let content = serde_json::to_string(&ListAgentsResult {
+            current_thread_id: session.conversation_id,
+            agents,
+        })
+        .map_err(|err| {
+            FunctionCallError::Fatal(format!("failed to serialize list_agents result: {err}"))
         })?;
 
         Ok(ToolOutput::Function {
@@ -303,7 +369,7 @@ mod wait {
                     "timeout_ms must be greater than zero".to_owned(),
                 ));
             }
-            ms => ms.min(MAX_WAIT_TIMEOUT_MS),
+            ms => ms.clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
         };
 
         session
@@ -538,6 +604,9 @@ fn collab_spawn_error(err: CodexErr) -> FunctionCallError {
         CodexErr::UnsupportedOperation(_) => {
             FunctionCallError::RespondToModel("collab manager unavailable".to_string())
         }
+        CodexErr::AgentLimitReached { max_threads } => FunctionCallError::RespondToModel(format!(
+            "Agent thread limit reached ({max_threads}). Solve the task yourself or close an agent."
+        )),
         err => FunctionCallError::RespondToModel(format!("collab spawn failed: {err}")),
     }
 }
@@ -568,6 +637,14 @@ fn build_agent_spawn_config(turn: &TurnContext) -> Result<Config, FunctionCallEr
     config.base_instructions = turn.base_instructions.clone();
     config.compact_prompt = turn.compact_prompt.clone();
     config.user_instructions = turn.user_instructions.clone();
+    apply_spawn_agent_runtime_overrides(&mut config, turn)?;
+    Ok(config)
+}
+
+fn apply_spawn_agent_runtime_overrides(
+    config: &mut Config,
+    turn: &TurnContext,
+) -> Result<(), FunctionCallError> {
     config.shell_environment_policy = turn.shell_environment_policy.clone();
     config.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
     config.cwd = turn.cwd.clone();
@@ -583,7 +660,17 @@ fn build_agent_spawn_config(turn: &TurnContext) -> Result<Config, FunctionCallEr
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!("sandbox_policy is invalid: {err}"))
         })?;
-    Ok(config)
+    Ok(())
+}
+
+fn apply_spawn_agent_overrides(config: &mut Config, child_depth: usize) {
+    config.agent_spawn_depth = child_depth;
+    if config
+        .agent_max_depth
+        .is_some_and(|max_depth| child_depth >= max_depth)
+    {
+        config.features.disable(Feature::Collab);
+    }
 }
 
 #[cfg(test)]
@@ -591,6 +678,7 @@ mod tests {
     use super::*;
     use crate::CodexAuth;
     use crate::ThreadManager;
+    use crate::agent::AgentRole;
     use crate::built_in_model_providers;
     use crate::codex::make_session_and_context;
     use crate::config::types::ShellEnvironmentPolicy;
@@ -821,6 +909,22 @@ mod tests {
         timed_out: bool,
     }
 
+    #[derive(Debug, Deserialize, PartialEq, Eq)]
+    struct ListAgentsResult {
+        current_thread_id: ThreadId,
+        agents: Vec<ListedAgentResult>,
+    }
+
+    #[derive(Debug, Deserialize, PartialEq, Eq)]
+    struct ListedAgentResult {
+        agent_id: ThreadId,
+        parent_id: Option<ThreadId>,
+        depth: usize,
+        agent_type: AgentRole,
+        agent_status: AgentStatus,
+        last_task_message: Option<String>,
+    }
+
     #[tokio::test]
     async fn wait_rejects_non_positive_timeout() {
         let (session, turn) = make_session_and_context().await;
@@ -840,6 +944,64 @@ mod tests {
             err,
             FunctionCallError::RespondToModel("timeout_ms must be greater than zero".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn list_agents_reports_live_spawned_agents() {
+        let (mut session, turn) = make_session_and_context().await;
+        let current_thread_id = session.conversation_id;
+        let manager = thread_manager();
+        let control = manager.agent_control();
+        session.services.agent_control = control.clone();
+        let parent_thread = manager
+            .start_thread(turn.client.config().as_ref().clone())
+            .await
+            .expect("start parent");
+        let mut child_config = turn.client.config().as_ref().clone();
+        child_config.agent_spawn_depth = 1;
+        let child_thread_id = control
+            .spawn_agent(
+                child_config,
+                "child task".to_string(),
+                AgentRole::Worker,
+                Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id: parent_thread.thread_id,
+                })),
+            )
+            .await
+            .expect("spawn child");
+
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "list_agents",
+            function_payload(json!({})),
+        );
+        let output = CollabHandler
+            .handle(invocation)
+            .await
+            .expect("list_agents should succeed");
+        let ToolOutput::Function {
+            content, success, ..
+        } = output
+        else {
+            panic!("expected function output");
+        };
+        let result: ListAgentsResult =
+            serde_json::from_str(&content).expect("list_agents result should be json");
+        assert_eq!(result.current_thread_id, current_thread_id);
+        assert_eq!(
+            result.agents,
+            vec![ListedAgentResult {
+                agent_id: child_thread_id,
+                parent_id: Some(parent_thread.thread_id),
+                depth: 1,
+                agent_type: AgentRole::Worker,
+                agent_status: AgentStatus::PendingInit,
+                last_task_message: Some("child task".to_string()),
+            }]
+        );
+        assert_eq!(success, Some(true));
     }
 
     #[tokio::test]

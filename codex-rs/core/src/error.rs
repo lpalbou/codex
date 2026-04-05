@@ -135,6 +135,9 @@ pub enum CodexErr {
     #[error("internal error; agent loop died unexpectedly")]
     InternalAgentDied,
 
+    #[error("maximum concurrent spawned agents reached: {max_threads}")]
+    AgentLimitReached { max_threads: usize },
+
     /// Sandbox error
     #[error("sandbox error: {0}")]
     Sandbox(#[from] SandboxErr),
@@ -199,6 +202,7 @@ impl CodexErr {
             | CodexErr::RetryLimit(_)
             | CodexErr::ContextWindowExceeded
             | CodexErr::ThreadNotFound(_)
+            | CodexErr::AgentLimitReached { .. }
             | CodexErr::Spawn
             | CodexErr::SessionConfiguredNotFirstEvent
             | CodexErr::UsageLimitReached(_) => false,

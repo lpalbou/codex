@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use crate::api_bridge::CoreAuthProvider;
 use crate::api_bridge::auth_provider_from_auth;
@@ -66,6 +67,7 @@ use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::tools::spec::create_tools_json_for_responses_api;
 
 pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
+pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 
 #[derive(Debug)]
 struct ModelClientState {
@@ -89,6 +91,7 @@ pub struct ModelClientSession {
     state: Arc<ModelClientState>,
     connection: Option<ApiWebSocketConnection>,
     websocket_last_items: Vec<ResponseItem>,
+    turn_state: Arc<OnceLock<String>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -124,6 +127,7 @@ impl ModelClient {
             state: Arc::clone(&self.state),
             connection: None,
             websocket_last_items: Vec::new(),
+            turn_state: Arc::new(OnceLock::new()),
         }
     }
 }
@@ -214,13 +218,11 @@ impl ModelClient {
 
         let mut extra_headers = ApiHeaderMap::new();
         if let SessionSource::SubAgent(sub) = &self.state.session_source {
-            let subagent = if let crate::protocol::SubAgentSource::Other(label) = sub {
-                label.clone()
-            } else {
-                serde_json::to_value(sub)
-                    .ok()
-                    .and_then(|v| v.as_str().map(std::string::ToString::to_string))
-                    .unwrap_or_else(|| "other".to_string())
+            let subagent = match sub {
+                crate::protocol::SubAgentSource::Review => "review".to_string(),
+                crate::protocol::SubAgentSource::Compact => "compact".to_string(),
+                crate::protocol::SubAgentSource::ThreadSpawn { .. } => "collab_spawn".to_string(),
+                crate::protocol::SubAgentSource::Other(label) => label.clone(),
             };
             if let Ok(val) = HeaderValue::from_str(&subagent) {
                 extra_headers.insert("x-openai-subagent", val);
@@ -334,8 +336,9 @@ impl ModelClientSession {
             store_override: None,
             conversation_id: Some(conversation_id),
             session_source: Some(self.state.session_source.clone()),
-            extra_headers: build_responses_headers(&self.state.config),
+            extra_headers: build_responses_headers(&self.state.config, Some(&self.turn_state)),
             compression,
+            turn_state: Some(Arc::clone(&self.turn_state)),
         }
     }
 
@@ -409,7 +412,7 @@ impl ModelClientSession {
             headers.extend(build_conversation_headers(options.conversation_id.clone()));
             let new_conn: ApiWebSocketConnection =
                 ApiWebSocketResponsesClient::new(api_provider, api_auth)
-                    .connect(headers)
+                    .connect(headers, options.turn_state.clone())
                     .await?;
             self.connection = Some(new_conn);
         }
@@ -650,7 +653,10 @@ fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
     headers
 }
 
-fn build_responses_headers(config: &Config) -> ApiHeaderMap {
+fn build_responses_headers(
+    config: &Config,
+    turn_state: Option<&Arc<OnceLock<String>>>,
+) -> ApiHeaderMap {
     let mut headers = beta_feature_headers(config);
     headers.insert(
         WEB_SEARCH_ELIGIBLE_HEADER,
@@ -662,6 +668,11 @@ fn build_responses_headers(config: &Config) -> ApiHeaderMap {
             },
         ),
     );
+    if let Some(turn_state) = turn_state.and_then(|turn_state| turn_state.get())
+        && let Ok(header_value) = HeaderValue::from_str(turn_state)
+    {
+        headers.insert(X_CODEX_TURN_STATE_HEADER, header_value);
+    }
     headers
 }
 

@@ -1,10 +1,18 @@
 use crate::agent::AgentStatus;
+use crate::agent::guards::Guards;
+use crate::agent::guards::SpawnedThreadRecord;
+use crate::agent::status::is_final;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use crate::session_prefix::format_subagent_notification_message;
+use crate::shell_snapshot::ShellSnapshot;
 use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
+use serde::Serialize;
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::watch;
@@ -18,12 +26,26 @@ pub(crate) struct AgentControl {
     /// This is `Weak` to avoid reference cycles and shadow persistence of the form
     /// `ThreadManagerState -> CodexThread -> Session -> SessionServices -> ThreadManagerState`.
     manager: Weak<ThreadManagerState>,
+    state: Arc<Guards>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub(crate) struct ListedAgent {
+    pub(crate) agent_id: ThreadId,
+    pub(crate) parent_id: Option<ThreadId>,
+    pub(crate) depth: usize,
+    pub(crate) agent_type: crate::agent::AgentRole,
+    pub(crate) agent_status: AgentStatus,
+    pub(crate) last_task_message: Option<String>,
 }
 
 impl AgentControl {
     /// Construct a new `AgentControl` that can spawn/message agents via the given manager state.
     pub(crate) fn new(manager: Weak<ThreadManagerState>) -> Self {
-        Self { manager }
+        Self {
+            manager,
+            ..Default::default()
+        }
     }
 
     /// Spawn a new agent thread and submit the initial prompt.
@@ -31,9 +53,43 @@ impl AgentControl {
         &self,
         config: crate::config::Config,
         prompt: String,
+        agent_type: crate::agent::AgentRole,
+        session_source: Option<SessionSource>,
     ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
-        let new_thread = state.spawn_new_thread(config, self.clone()).await?;
+        let reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
+        let inherited_shell_snapshot = self
+            .inherited_shell_snapshot_for_source(&state, session_source.as_ref())
+            .await;
+        let inherited_exec_policy = self
+            .inherited_exec_policy_for_source(&state, session_source.as_ref(), &config)
+            .await;
+        let notification_source = session_source.clone();
+        let parent_id = thread_spawn_parent_id(session_source.as_ref());
+        let child_depth = config.agent_spawn_depth;
+        let new_thread = match session_source {
+            Some(session_source) => {
+                state
+                    .spawn_new_thread_with_source(
+                        config,
+                        self.clone(),
+                        session_source,
+                        inherited_shell_snapshot,
+                        inherited_exec_policy,
+                    )
+                    .await?
+            }
+            None => state.spawn_new_thread(config, self.clone()).await?,
+        };
+        reservation.commit(
+            new_thread.thread_id,
+            SpawnedThreadRecord {
+                parent_id,
+                last_task_message: prompt.clone(),
+                agent_type,
+                depth: child_depth,
+            },
+        );
 
         // Notify a new thread has been created. This notification will be processed by clients
         // to subscribe or drain this newly created thread.
@@ -41,6 +97,7 @@ impl AgentControl {
         state.notify_thread_created(new_thread.thread_id);
 
         self.send_prompt(new_thread.thread_id, prompt).await?;
+        self.maybe_start_completion_watcher(new_thread.thread_id, notification_source);
 
         Ok(new_thread.thread_id)
     }
@@ -57,7 +114,7 @@ impl AgentControl {
                 agent_id,
                 Op::UserInput {
                     items: vec![UserInput::Text {
-                        text: prompt,
+                        text: prompt.clone(),
                         // Plain text conversion has no UI element ranges.
                         text_elements: Vec::new(),
                     }],
@@ -65,8 +122,12 @@ impl AgentControl {
                 },
             )
             .await;
+        if result.is_ok() {
+            self.state.update_last_task_message(agent_id, prompt);
+        }
         if matches!(result, Err(CodexErr::InternalAgentDied)) {
             let _ = state.remove_thread(&agent_id).await;
+            self.state.release_spawned_thread(agent_id);
         }
         result
     }
@@ -82,6 +143,7 @@ impl AgentControl {
         let state = self.upgrade()?;
         let result = state.send_op(agent_id, Op::Shutdown {}).await;
         let _ = state.remove_thread(&agent_id).await;
+        self.state.release_spawned_thread(agent_id);
         result
     }
 
@@ -108,11 +170,124 @@ impl AgentControl {
         Ok(thread.subscribe_status())
     }
 
+    pub(crate) async fn list_agents(&self) -> CodexResult<Vec<ListedAgent>> {
+        let state = self.upgrade()?;
+        let mut live_agents = self.state.live_agents();
+        live_agents.sort_by(|left, right| {
+            left.1
+                .depth
+                .cmp(&right.1.depth)
+                .then_with(|| {
+                    left.1
+                        .parent_id
+                        .map(|id| id.to_string())
+                        .cmp(&right.1.parent_id.map(|id| id.to_string()))
+                })
+                .then_with(|| left.0.to_string().cmp(&right.0.to_string()))
+        });
+
+        let mut agents = Vec::with_capacity(live_agents.len());
+        for (agent_id, record) in live_agents {
+            let status = match state.get_thread(agent_id).await {
+                Ok(thread) => thread.agent_status().await,
+                Err(_) => AgentStatus::NotFound,
+            };
+            agents.push(ListedAgent {
+                agent_id,
+                parent_id: record.parent_id,
+                depth: record.depth,
+                agent_type: record.agent_type,
+                agent_status: status,
+                last_task_message: Some(record.last_task_message),
+            });
+        }
+
+        Ok(agents)
+    }
+
+    fn maybe_start_completion_watcher(
+        &self,
+        child_thread_id: ThreadId,
+        session_source: Option<SessionSource>,
+    ) {
+        let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn { parent_thread_id })) =
+            session_source
+        else {
+            return;
+        };
+        let control = self.clone();
+        tokio::spawn(async move {
+            let mut status_rx = match control.subscribe_status(child_thread_id).await {
+                Ok(rx) => rx,
+                Err(_) => return,
+            };
+            let mut status = status_rx.borrow().clone();
+            while !is_final(&status) {
+                if status_rx.changed().await.is_err() {
+                    status = control.get_status(child_thread_id).await;
+                    break;
+                }
+                status = status_rx.borrow().clone();
+            }
+            if !is_final(&status) {
+                return;
+            }
+
+            let Ok(state) = control.upgrade() else {
+                return;
+            };
+            let _ = state
+                .send_op(
+                    parent_thread_id,
+                    Op::InjectSessionPrefix {
+                        text: format_subagent_notification_message(
+                            &child_thread_id.to_string(),
+                            &status,
+                        ),
+                    },
+                )
+                .await;
+        });
+    }
+
     fn upgrade(&self) -> CodexResult<Arc<ThreadManagerState>> {
         self.manager
             .upgrade()
             .ok_or_else(|| CodexErr::UnsupportedOperation("thread manager dropped".to_string()))
     }
+
+    async fn inherited_shell_snapshot_for_source(
+        &self,
+        state: &Arc<ThreadManagerState>,
+        session_source: Option<&SessionSource>,
+    ) -> Option<Arc<ShellSnapshot>> {
+        let parent_thread_id = thread_spawn_parent_id(session_source)?;
+        let parent_thread = state.get_thread(parent_thread_id).await.ok()?;
+        parent_thread.user_shell().shell_snapshot.clone()
+    }
+
+    async fn inherited_exec_policy_for_source(
+        &self,
+        state: &Arc<ThreadManagerState>,
+        session_source: Option<&SessionSource>,
+        child_config: &crate::config::Config,
+    ) -> Option<crate::exec_policy::ExecPolicyManager> {
+        let parent_thread_id = thread_spawn_parent_id(session_source)?;
+        let parent_thread = state.get_thread(parent_thread_id).await.ok()?;
+        let parent_config = parent_thread.config();
+        if !crate::exec_policy::child_uses_parent_exec_policy(&parent_config, child_config) {
+            return None;
+        }
+        Some(parent_thread.exec_policy())
+    }
+}
+
+fn thread_spawn_parent_id(session_source: Option<&SessionSource>) -> Option<ThreadId> {
+    let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { parent_thread_id }) = session_source?
+    else {
+        return None;
+    };
+    Some(*parent_thread_id)
 }
 
 #[cfg(test)]
@@ -247,7 +422,12 @@ mod tests {
         let control = AgentControl::default();
         let (_home, config) = test_config().await;
         let err = control
-            .spawn_agent(config, "hello".to_string())
+            .spawn_agent(
+                config,
+                "hello".to_string(),
+                crate::agent::AgentRole::Default,
+                None,
+            )
             .await
             .expect_err("spawn_agent should fail without a manager");
         assert_eq!(
@@ -349,7 +529,12 @@ mod tests {
         let harness = AgentControlHarness::new().await;
         let thread_id = harness
             .control
-            .spawn_agent(harness.config.clone(), "spawned".to_string())
+            .spawn_agent(
+                harness.config.clone(),
+                "spawned".to_string(),
+                crate::agent::AgentRole::Default,
+                None,
+            )
             .await
             .expect("spawn_agent should succeed");
         let _thread = harness
@@ -373,5 +558,122 @@ mod tests {
             .into_iter()
             .find(|entry| *entry == expected);
         assert_eq!(captured, Some(expected));
+    }
+
+    #[tokio::test]
+    async fn list_agents_tracks_spawned_threads_and_last_task_messages() {
+        let harness = AgentControlHarness::new().await;
+        let (parent_thread_id, _parent_thread) = harness.start_thread().await;
+        let mut child_config = harness.config.clone();
+        child_config.agent_spawn_depth = 1;
+        let child_thread_id = harness
+            .control
+            .spawn_agent(
+                child_config,
+                "initial task".to_string(),
+                crate::agent::AgentRole::Worker,
+                Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id,
+                })),
+            )
+            .await
+            .expect("spawn child");
+
+        harness
+            .control
+            .send_prompt(child_thread_id, "follow-up task".to_string())
+            .await
+            .expect("send follow-up");
+
+        let agents = harness.control.list_agents().await.expect("list agents");
+        assert_eq!(
+            agents,
+            vec![ListedAgent {
+                agent_id: child_thread_id,
+                parent_id: Some(parent_thread_id),
+                depth: 1,
+                agent_type: crate::agent::AgentRole::Worker,
+                agent_status: AgentStatus::PendingInit,
+                last_task_message: Some("follow-up task".to_string()),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_spawn_child_inherits_parent_shell_snapshot() {
+        let harness = AgentControlHarness::new().await;
+        let mut config = harness.config.clone();
+        config
+            .features
+            .enable(crate::features::Feature::ShellSnapshot);
+        let mut child_config = config.clone();
+        child_config.agent_spawn_depth = 1;
+
+        let parent = harness
+            .manager
+            .start_thread(config.clone())
+            .await
+            .expect("start parent");
+        let child_thread_id = harness
+            .control
+            .spawn_agent(
+                child_config,
+                "spawned".to_string(),
+                crate::agent::AgentRole::Default,
+                Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id: parent.thread_id,
+                })),
+            )
+            .await
+            .expect("spawn child");
+
+        let parent_snapshot = parent
+            .thread
+            .user_shell()
+            .shell_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.path.clone());
+        let child = harness
+            .manager
+            .get_thread(child_thread_id)
+            .await
+            .expect("get child");
+        let child_snapshot = child
+            .user_shell()
+            .shell_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.path.clone());
+
+        assert_eq!(child_snapshot, parent_snapshot);
+        assert_eq!(child_snapshot.is_some(), true);
+    }
+
+    #[tokio::test]
+    async fn thread_spawn_child_shares_parent_exec_policy_when_layers_match() {
+        let harness = AgentControlHarness::new().await;
+        let (parent_thread_id, parent_thread) = harness.start_thread().await;
+        let mut child_config = harness.config.clone();
+        child_config.agent_spawn_depth = 1;
+        let child_thread_id = harness
+            .control
+            .spawn_agent(
+                child_config,
+                "spawned".to_string(),
+                crate::agent::AgentRole::Default,
+                Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id,
+                })),
+            )
+            .await
+            .expect("spawn child");
+        let child_thread = harness
+            .manager
+            .get_thread(child_thread_id)
+            .await
+            .expect("get child");
+
+        let parent_policy = parent_thread.exec_policy().current();
+        let child_policy = child_thread.exec_policy().current();
+        assert!(Arc::ptr_eq(&parent_policy, &child_policy));
     }
 }

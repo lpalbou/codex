@@ -11,6 +11,7 @@ use futures::Stream;
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -22,6 +23,7 @@ pub(crate) fn spawn_chat_stream(
     stream_response: StreamResponse,
     idle_timeout: Duration,
     telemetry: Option<std::sync::Arc<dyn SseTelemetry>>,
+    _turn_state: Option<std::sync::Arc<OnceLock<String>>>,
 ) -> ResponseStream {
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
     tokio::spawn(async move {

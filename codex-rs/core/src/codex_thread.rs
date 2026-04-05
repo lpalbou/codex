@@ -1,24 +1,40 @@
 use crate::agent::AgentStatus;
 use crate::codex::Codex;
+use crate::config::Config;
 use crate::error::Result as CodexResult;
+use crate::exec_policy::ExecPolicyManager;
 use crate::protocol::Event;
 use crate::protocol::Op;
 use crate::protocol::Submission;
+use crate::shell;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::watch;
 
 pub struct CodexThread {
     codex: Codex,
     rollout_path: PathBuf,
+    config: Arc<Config>,
+    user_shell: Arc<shell::Shell>,
+    exec_policy: ExecPolicyManager,
 }
 
 /// Conduit for the bidirectional stream of messages that compose a thread
 /// (formerly called a conversation) in Codex.
 impl CodexThread {
-    pub(crate) fn new(codex: Codex, rollout_path: PathBuf) -> Self {
+    pub(crate) fn new(
+        codex: Codex,
+        rollout_path: PathBuf,
+        config: Arc<Config>,
+        user_shell: Arc<shell::Shell>,
+        exec_policy: ExecPolicyManager,
+    ) -> Self {
         Self {
             codex,
             rollout_path,
+            config,
+            user_shell,
+            exec_policy,
         }
     }
 
@@ -45,5 +61,17 @@ impl CodexThread {
 
     pub fn rollout_path(&self) -> PathBuf {
         self.rollout_path.clone()
+    }
+
+    pub(crate) fn config(&self) -> Arc<Config> {
+        Arc::clone(&self.config)
+    }
+
+    pub(crate) fn user_shell(&self) -> Arc<shell::Shell> {
+        Arc::clone(&self.user_shell)
+    }
+
+    pub(crate) fn exec_policy(&self) -> ExecPolicyManager {
+        self.exec_policy.clone()
     }
 }

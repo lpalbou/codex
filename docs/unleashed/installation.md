@@ -37,6 +37,19 @@ Run:
 codex-unleashed
 ```
 
+Useful launch examples:
+
+```sh
+# Keep the fork defaults: gpt-5.2 + xhigh + unlimited spawn limits
+codex-unleashed
+
+# Explicitly cap spawned-agent fan-out for one run
+codex-unleashed --max-threads 8 --max-depth 2
+
+# Route the built-in OpenAI provider through a compatible gateway
+codex-unleashed --base-url http://127.0.0.1:8099/v1
+```
+
 ## Optional: reuse existing authentication
 
 Codex stores credentials in `$CODEX_HOME/auth.json`. If you already use upstream Codex (`~/.codex`)
@@ -62,6 +75,12 @@ You can forward any CLI flags after `--`:
 cargo run --bin codex-unleashed -- --enable collab
 ```
 
+For example:
+
+```sh
+cargo run --bin codex-unleashed -- --enable collab --max-threads 12 --max-depth 3
+```
+
 ## Uninstall
 
 If you installed with `cargo install`:
@@ -79,4 +98,3 @@ afterwards.
 - `codex-rs/cli/Cargo.toml`: defines the additional `codex-unleashed` binary.
 - `codex-rs/cli/src/main.rs`: auto-sets `CODEX_HOME` to `~/.codex-unleashed` when the executable
   name is `codex-unleashed` and `CODEX_HOME` is not set.
-

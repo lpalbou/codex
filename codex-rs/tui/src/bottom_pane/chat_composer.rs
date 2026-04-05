@@ -1503,6 +1503,8 @@ impl ChatComposer {
                         | SlashCommand::Review
                         | SlashCommand::Save
                         | SlashCommand::Context
+                        | SlashCommand::MaxThreads
+                        | SlashCommand::MaxDepth
                 )
             {
                 self.textarea.set_text("");

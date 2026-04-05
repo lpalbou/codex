@@ -192,6 +192,7 @@ mod tests {
     use super::*;
     use crate::provider::RetryConfig;
     use crate::provider::WireApi;
+    use codex_protocol::ThreadId;
     use codex_protocol::protocol::SubAgentSource;
     use http::HeaderValue;
     use pretty_assertions::assert_eq;
@@ -256,6 +257,28 @@ mod tests {
         assert_eq!(
             request.headers.get("x-openai-subagent"),
             Some(&HeaderValue::from_static("review"))
+        );
+    }
+
+    #[test]
+    fn thread_spawn_subagent_header_maps_to_collab_spawn() {
+        let provider = provider("openai", "https://api.openai.com/v1");
+        let input = vec![ResponseItem::Message {
+            id: None,
+            role: "user".into(),
+            content: Vec::new(),
+        }];
+
+        let request = ResponsesRequestBuilder::new("gpt-test", "inst", &input)
+            .session_source(Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: ThreadId::new(),
+            })))
+            .build(&provider)
+            .expect("request");
+
+        assert_eq!(
+            request.headers.get("x-openai-subagent"),
+            Some(&HeaderValue::from_static("collab_spawn"))
         );
     }
 }

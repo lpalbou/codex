@@ -189,6 +189,9 @@ pub struct Codex {
 pub struct CodexSpawnOk {
     pub codex: Codex,
     pub thread_id: ThreadId,
+    pub(crate) config: Arc<Config>,
+    pub(crate) user_shell: Arc<shell::Shell>,
+    pub(crate) exec_policy: ExecPolicyManager,
     #[deprecated(note = "use thread_id")]
     pub conversation_id: ThreadId,
 }
@@ -235,6 +238,8 @@ impl Codex {
         conversation_history: InitialHistory,
         session_source: SessionSource,
         agent_control: AgentControl,
+        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_exec_policy: Option<ExecPolicyManager>,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -256,9 +261,12 @@ impl Codex {
 
         let user_instructions = get_user_instructions(&config, Some(&loaded_skills.skills)).await;
 
-        let exec_policy = ExecPolicyManager::load(&config.features, &config.config_layer_stack)
-            .await
-            .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?;
+        let exec_policy = match inherited_exec_policy {
+            Some(exec_policy) => exec_policy,
+            None => ExecPolicyManager::load(&config.features, &config.config_layer_stack)
+                .await
+                .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?,
+        };
 
         let _ = models_manager
             .list_models(
@@ -317,6 +325,7 @@ impl Codex {
             session_source_clone,
             skills_manager,
             agent_control,
+            inherited_shell_snapshot,
         )
         .await
         .map_err(|e| {
@@ -326,7 +335,11 @@ impl Codex {
         let thread_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.
-        tokio::spawn(submission_loop(session, config, rx_sub));
+        tokio::spawn(submission_loop(
+            Arc::clone(&session),
+            Arc::clone(&config),
+            rx_sub,
+        ));
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
@@ -338,6 +351,9 @@ impl Codex {
         Ok(CodexSpawnOk {
             codex,
             thread_id,
+            config,
+            user_shell: session.user_shell(),
+            exec_policy: session.services.exec_policy.clone(),
             conversation_id: thread_id,
         })
     }
@@ -591,6 +607,7 @@ impl Session {
         session_source: SessionSource,
         skills_manager: Arc<SkillsManager>,
         agent_control: AgentControl,
+        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -705,10 +722,12 @@ impl Session {
         let mut default_shell = shell::default_user_shell();
         // Create the mutable state for the Session.
         if config.features.enabled(Feature::ShellSnapshot) {
-            default_shell.shell_snapshot =
-                ShellSnapshot::try_new(&config.codex_home, conversation_id, &default_shell)
+            default_shell.shell_snapshot = match inherited_shell_snapshot {
+                Some(shell_snapshot) => Some(shell_snapshot),
+                None => ShellSnapshot::try_new(&config.codex_home, conversation_id, &default_shell)
                     .await
-                    .map(Arc::new);
+                    .map(Arc::new),
+            };
         }
         let state = SessionState::new(session_configuration.clone());
 
@@ -1889,6 +1908,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 handlers::get_history_entry_request(&sess, &config, sub.id.clone(), offset, log_id)
                     .await;
             }
+            Op::InjectSessionPrefix { text } => {
+                handlers::inject_session_prefix(&sess, text).await;
+            }
             Op::ListMcpTools => {
                 handlers::list_mcp_tools(&sess, &config, sub.id.clone()).await;
             }
@@ -1982,6 +2004,8 @@ mod handlers {
     use codex_protocol::protocol::WarningEvent;
 
     use crate::context_manager::is_user_turn_boundary;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseInputItem;
     use codex_protocol::models::ResponseItem;
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
@@ -2178,6 +2202,24 @@ mod handlers {
                 warn!("failed to append to message history: {e}");
             }
         });
+    }
+
+    pub async fn inject_session_prefix(sess: &Arc<Session>, text: String) {
+        let pending_item = ResponseInputItem::Message {
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText { text }],
+        };
+        let pending_items = vec![pending_item];
+        let Err(items_without_active_turn) = sess.inject_response_items(pending_items).await else {
+            return;
+        };
+
+        let turn_context = sess.new_default_turn().await;
+        let items: Vec<ResponseItem> = items_without_active_turn
+            .into_iter()
+            .map(ResponseItem::from)
+            .collect();
+        sess.record_conversation_items(&turn_context, &items).await;
     }
 
     pub async fn get_history_entry_request(

@@ -11,6 +11,15 @@ Fork start date: 2026-04-03
 This fork advocates for **depth over speed**: one careful, long-running agentic orchestration (even
 1h+) is often more productive than many fast iterations with avoidable mistakes.
 
+## What this fork adds
+
+- Predictable default model policy: `gpt-5.2` + `xhigh`
+- Consistent spawned-agent inheritance for model, reasoning, approvals, and shell state
+- Real sub-agent observability with `/agents` and model-visible `list_agents`
+- Prompt observability with `/context`
+- Transcript export with `/save`
+- Dedicated documentation for memory, orchestration, local models, and context internals
+
 ## Quick start (side-by-side install)
 
 ```sh
@@ -42,7 +51,9 @@ codex-unleashed --provider ollama --model qwen2.5-coder:7b
 - `docs/unleashed/model-control.md` — default model/effort, consistent routing, compaction notes
 - `docs/unleashed/local-models.md` — LM Studio / Ollama syntax and defaults
 - `docs/unleashed/agents-dashboard.md` — `/agents` dashboard + how to enable real sub-agents
+- `docs/unleashed/context.md` — what actually enters the next model request
 - `docs/unleashed/save.md` — `/save` (compact/full) + JSONL exports for SFT/CPT
+- `docs/memory.md` — deep dive into the later Codex memories pipeline and why it matters
 
 ## Credits / upstream
 

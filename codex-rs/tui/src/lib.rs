@@ -106,6 +106,24 @@ pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
 // (tests access modules directly within the crate)
 
+fn parse_agent_limit_flag(name: &str, value: i64) -> std::io::Result<Option<usize>> {
+    if value == -1 {
+        return Ok(None);
+    }
+    if value < -1 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{name} must be -1 or a non-negative integer"),
+        ));
+    }
+    usize::try_from(value).map(Some).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{name} is too large for this platform"),
+        )
+    })
+}
+
 pub async fn run_main(
     mut cli: Cli,
     codex_linux_sandbox_exe: Option<PathBuf>,
@@ -139,38 +157,6 @@ pub async fn run_main(
         .as_deref()
         .map(str::trim)
         .filter(|provider| !provider.is_empty());
-
-    let force_oss_provider = provider_override.is_some_and(is_oss_provider_id)
-        || (provider_override.is_none() && cli.oss);
-
-    if let Some(base_url) = cli
-        .base_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|url| !url.is_empty())
-    {
-        let env_key = match provider_override {
-            Some(provider) => {
-                if is_oss_provider_id(provider) {
-                    "CODEX_OSS_BASE_URL"
-                } else {
-                    "OPENAI_BASE_URL"
-                }
-            }
-            None => {
-                if cli.oss {
-                    "CODEX_OSS_BASE_URL"
-                } else {
-                    "OPENAI_BASE_URL"
-                }
-            }
-        };
-        // SAFETY: We apply provider base URL overrides before starting the
-        // interactive runtime so no other threads read these values concurrently.
-        unsafe {
-            std::env::set_var(env_key, base_url);
-        }
-    }
 
     // When using `--oss`, let the bootstrapper pick the model (defaulting to
     // gpt-oss:20b) and ensure it is present locally. Also, force the built‑in
@@ -218,6 +204,50 @@ pub async fn run_main(
         }
     };
 
+    #[allow(clippy::print_stderr)]
+    let config_profile = match config_toml.get_config_profile(cli.config_profile.clone()) {
+        Ok(profile) => profile,
+        Err(err) => {
+            eprintln!("Error loading config profile: {err}");
+            std::process::exit(1);
+        }
+    };
+
+    let configured_model_provider = config_profile
+        .model_provider
+        .or(config_toml.model_provider.clone());
+    let force_oss_provider = if let Some(provider) = provider_override {
+        is_oss_provider_id(provider)
+    } else if cli.oss {
+        true
+    } else {
+        configured_model_provider
+            .as_deref()
+            .is_some_and(is_oss_provider_id)
+    };
+
+    let openai_base_url_override = cli
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(ToOwned::to_owned)
+        .filter(|_| !force_oss_provider);
+
+    if let Some(base_url) = cli
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        && force_oss_provider
+    {
+        // SAFETY: We apply provider base URL overrides before starting the
+        // interactive runtime so no other threads read these values concurrently.
+        unsafe {
+            std::env::set_var("CODEX_OSS_BASE_URL", base_url);
+        }
+    }
+
     let model_provider_override = if let Some(provider) = provider_override {
         Some(provider.to_string())
     } else if cli.oss {
@@ -259,6 +289,14 @@ pub async fn run_main(
     };
 
     let additional_dirs = cli.add_dir.clone();
+    let agent_max_threads = cli
+        .max_threads
+        .map(|value| parse_agent_limit_flag("--max-threads", value))
+        .transpose()?;
+    let agent_max_depth = cli
+        .max_depth
+        .map(|value| parse_agent_limit_flag("--max-depth", value))
+        .transpose()?;
 
     let overrides = ConfigOverrides {
         model,
@@ -270,6 +308,9 @@ pub async fn run_main(
         codex_linux_sandbox_exe,
         hide_agent_reasoning: force_oss_provider.then_some(true),
         show_raw_agent_reasoning: force_oss_provider.then_some(true),
+        agent_max_threads,
+        agent_max_depth,
+        openai_base_url: openai_base_url_override,
         additional_writable_roots: additional_dirs,
         ..Default::default()
     };

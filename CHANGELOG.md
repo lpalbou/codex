@@ -25,6 +25,15 @@ spawned sub-agents.
   - Enable to restore upstream behavior: `codex --enable worker_model_override`
 - Add `/agents` TUI overlay for live sub-agent observability (status, last action, approvals, and
   context-window usage).
+- Add `list_agents` collab tool so the orchestrator can recover live agent ids, parent
+  relationships, depth, status, and last assigned task.
+- Share execpolicy state across thread-spawn sub-agents when they use the same config-layer roots,
+  so persisted approval rules do not fragment across the same agent tree.
+- Reuse the parent shell snapshot for thread-spawn sub-agents when shell snapshots are enabled.
+- Clarify and document `list_agents` as a runtime registry view for the orchestrator rather than a
+  child self-report channel.
+- Add `docs/memory.md`, a standalone deep dive into the later Codex memories pipeline
+  (`0.99` → `0.118`) covering architecture, intent, artifacts, benefits, and risks.
 - Add `/save` slash command to export chat history to Markdown.
   - Default is compact (user/assistant/thoughts); add `--full` to include tool calls/results.
 - Note: `/compact` uses the remote `responses/compact` endpoint by default, which does not accept

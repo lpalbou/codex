@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 
+use crate::config::Config;
+use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
 use crate::is_dangerous_command::command_might_be_dangerous;
@@ -20,6 +22,7 @@ use codex_execpolicy::blocking_append_allow_prefix_rule;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use thiserror::Error;
 use tokio::fs;
 use tokio::task::spawn_blocking;
@@ -42,6 +45,19 @@ fn is_policy_match(rule_match: &RuleMatch) -> bool {
         RuleMatch::PrefixRuleMatch { .. } => true,
         RuleMatch::HeuristicsRuleMatch { .. } => false,
     }
+}
+
+pub(crate) fn child_uses_parent_exec_policy(parent_config: &Config, child_config: &Config) -> bool {
+    fn exec_policy_config_folders(config: &Config) -> Vec<AbsolutePathBuf> {
+        config
+            .config_layer_stack
+            .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst)
+            .into_iter()
+            .filter_map(ConfigLayerEntry::config_folder)
+            .collect()
+    }
+
+    exec_policy_config_folders(parent_config) == exec_policy_config_folders(child_config)
 }
 
 #[derive(Debug, Error)]
@@ -83,14 +99,17 @@ pub enum ExecPolicyUpdateError {
     FeatureDisabled,
 }
 
+#[derive(Clone)]
 pub(crate) struct ExecPolicyManager {
-    policy: ArcSwap<Policy>,
+    policy: Arc<ArcSwap<Policy>>,
+    update_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl ExecPolicyManager {
     pub(crate) fn new(policy: Arc<Policy>) -> Self {
         Self {
-            policy: ArcSwap::from(policy),
+            policy: Arc::new(ArcSwap::from(policy)),
+            update_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -172,11 +191,24 @@ impl ExecPolicyManager {
         codex_home: &Path,
         amendment: &ExecPolicyAmendment,
     ) -> Result<(), ExecPolicyUpdateError> {
+        let _update_guard = self.update_lock.lock().await;
         let policy_path = default_policy_path(codex_home);
-        let prefix = amendment.command.clone();
+        let current_policy = self.current();
+        let existing_evaluation = current_policy
+            .check_multiple(std::iter::once(&amendment.command), &|_| {
+                Decision::Forbidden
+            });
+        let already_allowed = existing_evaluation.decision == Decision::Allow
+            && existing_evaluation.matched_rules.iter().any(|rule_match| {
+                is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
+            });
+        if already_allowed {
+            return Ok(());
+        }
+
         spawn_blocking({
             let policy_path = policy_path.clone();
-            let prefix = prefix.clone();
+            let prefix = amendment.command.clone();
             move || blocking_append_allow_prefix_rule(&policy_path, &prefix)
         })
         .await
@@ -186,8 +218,8 @@ impl ExecPolicyManager {
             source,
         })?;
 
-        let mut updated_policy = self.current().as_ref().clone();
-        updated_policy.add_prefix_rule(&prefix, Decision::Allow)?;
+        let mut updated_policy = current_policy.as_ref().clone();
+        updated_policy.add_prefix_rule(&amendment.command, Decision::Allow)?;
         self.policy.store(Arc::new(updated_policy));
         Ok(())
     }

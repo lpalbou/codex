@@ -13,7 +13,15 @@ use http::HeaderMap;
 use http::Method;
 use serde_json::Value;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
+
+type StreamSpawner = fn(
+    StreamResponse,
+    Duration,
+    Option<Arc<dyn SseTelemetry>>,
+    Option<Arc<OnceLock<String>>>,
+) -> ResponseStream;
 
 pub(crate) struct StreamingClient<T: HttpTransport, A: AuthProvider> {
     transport: T,
@@ -54,7 +62,8 @@ impl<T: HttpTransport, A: AuthProvider> StreamingClient<T, A> {
         body: Value,
         extra_headers: HeaderMap,
         compression: RequestCompression,
-        spawner: fn(StreamResponse, Duration, Option<Arc<dyn SseTelemetry>>) -> ResponseStream,
+        spawner: StreamSpawner,
+        turn_state: Option<Arc<OnceLock<String>>>,
     ) -> Result<ResponseStream, ApiError> {
         let builder = || {
             let mut req = self.provider.build_request(Method::POST, path);
@@ -80,6 +89,7 @@ impl<T: HttpTransport, A: AuthProvider> StreamingClient<T, A> {
             stream_response,
             self.provider.stream_idle_timeout,
             self.sse_telemetry.clone(),
+            turn_state,
         ))
     }
 }

@@ -17,6 +17,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
+use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
@@ -300,11 +301,32 @@ impl ThreadManagerState {
         config: Config,
         agent_control: AgentControl,
     ) -> CodexResult<NewThread> {
-        self.spawn_thread(
+        self.spawn_new_thread_with_source(
+            config,
+            agent_control,
+            self.session_source.clone(),
+            None,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn spawn_new_thread_with_source(
+        &self,
+        config: Config,
+        agent_control: AgentControl,
+        session_source: SessionSource,
+        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_exec_policy: Option<crate::exec_policy::ExecPolicyManager>,
+    ) -> CodexResult<NewThread> {
+        self.spawn_thread_with_source(
             config,
             InitialHistory::New,
             Arc::clone(&self.auth_manager),
             agent_control,
+            session_source,
+            inherited_shell_snapshot,
+            inherited_exec_policy,
         )
         .await
     }
@@ -317,25 +339,58 @@ impl ThreadManagerState {
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
     ) -> CodexResult<NewThread> {
+        self.spawn_thread_with_source(
+            config,
+            initial_history,
+            auth_manager,
+            agent_control,
+            self.session_source.clone(),
+            None,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn spawn_thread_with_source(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        auth_manager: Arc<AuthManager>,
+        agent_control: AgentControl,
+        session_source: SessionSource,
+        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_exec_policy: Option<crate::exec_policy::ExecPolicyManager>,
+    ) -> CodexResult<NewThread> {
         let CodexSpawnOk {
-            codex, thread_id, ..
+            codex,
+            thread_id,
+            config,
+            user_shell,
+            exec_policy,
+            ..
         } = Codex::spawn(
             config,
             auth_manager,
             Arc::clone(&self.models_manager),
             Arc::clone(&self.skills_manager),
             initial_history,
-            self.session_source.clone(),
+            session_source,
             agent_control,
+            inherited_shell_snapshot,
+            inherited_exec_policy,
         )
         .await?;
-        self.finalize_thread_spawn(codex, thread_id).await
+        self.finalize_thread_spawn(codex, thread_id, config, user_shell, exec_policy)
+            .await
     }
 
     async fn finalize_thread_spawn(
         &self,
         codex: Codex,
         thread_id: ThreadId,
+        config: Arc<Config>,
+        user_shell: Arc<crate::shell::Shell>,
+        exec_policy: crate::exec_policy::ExecPolicyManager,
     ) -> CodexResult<NewThread> {
         let event = codex.next_event().await?;
         let session_configured = match event {
@@ -351,6 +406,9 @@ impl ThreadManagerState {
         let thread = Arc::new(CodexThread::new(
             codex,
             session_configured.rollout_path.clone(),
+            config,
+            user_shell,
+            exec_policy,
         ));
         self.threads.write().await.insert(thread_id, thread.clone());
 

@@ -53,6 +53,31 @@ pub struct Cli {
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
+    /// Model provider to use (openai, lmstudio, ollama, ollama-chat).
+    ///
+    /// This overrides config defaults and applies to spawned sub-agents.
+    #[arg(long = "provider")]
+    pub provider: Option<String>,
+
+    /// Override the provider base URL (e.g. http://localhost:11434/v1).
+    ///
+    /// When used with an OSS provider, sets CODEX_OSS_BASE_URL for this run.
+    /// Otherwise overrides the built-in `openai` provider base URL for this run.
+    #[arg(long = "base-url")]
+    pub base_url: Option<String>,
+
+    /// Maximum number of spawned sub-agents allowed for this run.
+    ///
+    /// Use `-1` for unlimited and `0` to disable spawned agents.
+    #[arg(long = "max-threads", allow_hyphen_values = true)]
+    pub max_threads: Option<i64>,
+
+    /// Maximum nesting depth allowed for spawned sub-agents for this run.
+    ///
+    /// Root sessions start at depth `0`. Use `-1` for unlimited and `0` to disable child spawns.
+    #[arg(long = "max-depth", allow_hyphen_values = true)]
+    pub max_depth: Option<i64>,
+
     /// Convenience flag to select the local open source model provider. Equivalent to -c
     /// model_provider=oss; verifies a local LM Studio or Ollama server is running.
     #[arg(long = "oss", default_value_t = false)]
@@ -131,6 +156,10 @@ impl From<codex_tui::Cli> for Cli {
             fork_session_id: cli.fork_session_id,
             fork_show_all: cli.fork_show_all,
             model: cli.model,
+            provider: cli.provider,
+            base_url: cli.base_url,
+            max_threads: cli.max_threads,
+            max_depth: cli.max_depth,
             oss: cli.oss,
             oss_provider: cli.oss_provider,
             config_profile: cli.config_profile,

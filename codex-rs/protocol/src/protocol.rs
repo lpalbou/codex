@@ -190,6 +190,10 @@ pub enum Op {
     /// Request a single history entry identified by `log_id` + `offset`.
     GetHistoryEntryRequest { offset: usize, log_id: u64 },
 
+    /// Internal-only operation used to append a model-visible session-prefix
+    /// message without creating a new user turn boundary.
+    InjectSessionPrefix { text: String },
+
     /// Request the list of MCP tools available across all configured servers.
     /// Reply is delivered via `EventMsg::McpListToolsResponse`.
     ListMcpTools,
@@ -1505,6 +1509,7 @@ pub enum SessionSource {
 pub enum SubAgentSource {
     Review,
     Compact,
+    ThreadSpawn { parent_thread_id: ThreadId },
     Other(String),
 }
 
@@ -1526,6 +1531,9 @@ impl fmt::Display for SubAgentSource {
         match self {
             SubAgentSource::Review => f.write_str("review"),
             SubAgentSource::Compact => f.write_str("compact"),
+            SubAgentSource::ThreadSpawn { parent_thread_id } => {
+                write!(f, "thread_spawn_{parent_thread_id}")
+            }
             SubAgentSource::Other(other) => f.write_str(other),
         }
     }

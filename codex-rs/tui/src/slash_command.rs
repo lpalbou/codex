@@ -28,6 +28,8 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
+    MaxThreads,
+    MaxDepth,
     Context,
     Save,
     Agents,
@@ -59,6 +61,8 @@ impl SlashCommand {
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::MaxThreads => "show or set the spawned sub-agent thread limit",
+            SlashCommand::MaxDepth => "show or set the spawned sub-agent depth limit",
             SlashCommand::Context => "inspect and control what context is sent next",
             SlashCommand::Save => "save chat history to a markdown file",
             SlashCommand::Agents => "show live sub-agent dashboard",
@@ -96,7 +100,9 @@ impl SlashCommand {
             | SlashCommand::Experimental
             | SlashCommand::Review
             | SlashCommand::Logout
-            | SlashCommand::Collab => false,
+            | SlashCommand::Collab
+            | SlashCommand::MaxThreads
+            | SlashCommand::MaxDepth => false,
             SlashCommand::Diff
             | SlashCommand::Mention
             | SlashCommand::Skills

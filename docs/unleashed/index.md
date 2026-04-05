@@ -13,6 +13,7 @@ If you’re looking for upstream docs, start in `docs/` or the upstream reposito
 - Local models (LM Studio / Ollama): `docs/unleashed/local-models.md`
 - Sub-agents observability (`/agents`): `docs/unleashed/agents-dashboard.md`
 - Exporting transcripts (`/save`): `docs/unleashed/save.md`
+- Later Codex memories pipeline analysis: `docs/memory.md`
 
 ## Philosophy
 

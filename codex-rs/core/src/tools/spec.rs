@@ -8,6 +8,7 @@ use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::handlers::collab::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::collab::MAX_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::collab::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::registry::ToolRegistryBuilder;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
@@ -454,7 +455,8 @@ fn create_spawn_agent_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
-        description: "Spawn a new agent and return its id.".to_string(),
+        description: "Spawn a new agent and return its id. The spawned agent runs in a fresh thread: it inherits model/config/cwd/sandbox state, but it does not automatically inherit the full parent conversation history, so the message should be self-contained. After spawning, keep the id, use list_agents if you need to recover it later, wait for completion, then close the agent when no further work is needed."
+            .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -490,11 +492,26 @@ fn create_send_input_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "send_input".to_string(),
-        description: "Send a message to an existing agent.".to_string(),
+        description: "Send a follow-up message to an existing agent. Messages are queued until the agent finishes its current task unless interrupt=true. Do not use this to check progress; use wait instead."
+            .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["id".to_string(), "message".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_list_agents_tool() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: "list_agents".to_string(),
+        description: "List live spawned agents in the current shared agent tree. Use this when you need to recover agent ids, statuses, parent relationships, or last assigned tasks before waiting, messaging, or closing agents."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties: BTreeMap::new(),
+            required: None,
             additional_properties: Some(false.into()),
         },
     })
@@ -513,16 +530,15 @@ fn create_wait_tool() -> ToolSpec {
         "timeout_ms".to_string(),
         JsonSchema::Number {
             description: Some(format!(
-                "Optional timeout in milliseconds. Defaults to {DEFAULT_WAIT_TIMEOUT_MS} and max {MAX_WAIT_TIMEOUT_MS}."
+                "Optional timeout in milliseconds. Defaults to {DEFAULT_WAIT_TIMEOUT_MS}, minimum {MIN_WAIT_TIMEOUT_MS}, and maximum {MAX_WAIT_TIMEOUT_MS}."
             )),
         },
     );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "wait".to_string(),
-        description:
-            "Wait for agents and return their statuses. If no agent is done, no status get returned."
-                .to_string(),
+        description: "Wait for one or more agents to reach a final status. Returns final statuses for any agents that finished before the deadline and an empty status map when timed out. Prefer long waits over short polling; completed agents also record a notification in the parent history."
+            .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -543,7 +559,8 @@ fn create_close_agent_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "close_agent".to_string(),
-        description: "Close an agent and return its last known status.".to_string(),
+        description: "Close an agent when no further work is needed and return its last known status. Use this to free thread capacity after you have harvested the result."
+            .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -1267,10 +1284,12 @@ pub(crate) fn build_specs(
         let collab_handler = Arc::new(CollabHandler);
         builder.push_spec(create_spawn_agent_tool());
         builder.push_spec(create_send_input_tool());
+        builder.push_spec(create_list_agents_tool());
         builder.push_spec(create_wait_tool());
         builder.push_spec(create_close_agent_tool());
         builder.register_handler("spawn_agent", collab_handler.clone());
         builder.register_handler("send_input", collab_handler.clone());
+        builder.register_handler("list_agents", collab_handler.clone());
         builder.register_handler("wait", collab_handler.clone());
         builder.register_handler("close_agent", collab_handler);
     }
@@ -1468,7 +1487,13 @@ mod tests {
         let (tools, _) = build_specs(&tools_config, None).build();
         assert_contains_tool_names(
             &tools,
-            &["spawn_agent", "send_input", "wait", "close_agent"],
+            &[
+                "spawn_agent",
+                "send_input",
+                "list_agents",
+                "wait",
+                "close_agent",
+            ],
         );
     }
 

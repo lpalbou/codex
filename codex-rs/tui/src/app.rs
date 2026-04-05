@@ -380,6 +380,54 @@ impl App {
         }
     }
 
+    async fn restart_current_session(
+        &mut self,
+        tui: &mut tui::Tui,
+        banner_lines: Vec<Line<'static>>,
+    ) {
+        let Some(rollout_path) = self.chat_widget.rollout_path() else {
+            self.chat_widget.add_error_message(
+                "The setting was updated for this run, but Codex cannot restart the agent session yet (rollout path not available). Restart Codex to apply."
+                    .to_string(),
+            );
+            return;
+        };
+
+        match self
+            .server
+            .fork_thread(usize::MAX, self.config.clone(), rollout_path)
+            .await
+        {
+            Ok(forked) => {
+                self.shutdown_current_thread().await;
+                let current_model = forked.session_configured.model.clone();
+                let init = crate::chatwidget::ChatWidgetInit {
+                    config: self.config.clone(),
+                    frame_requester: tui.frame_requester(),
+                    app_event_tx: self.app_event_tx.clone(),
+                    initial_prompt: None,
+                    initial_images: Vec::new(),
+                    enhanced_keys_supported: self.enhanced_keys_supported,
+                    auth_manager: self.auth_manager.clone(),
+                    models_manager: self.server.get_models_manager(),
+                    feedback: self.feedback.clone(),
+                    is_first_run: false,
+                    model: Some(self.current_model.clone()),
+                };
+                self.chat_widget =
+                    ChatWidget::new_from_existing(init, forked.thread, forked.session_configured);
+                self.current_model = current_model;
+                self.chat_widget.add_plain_history_lines(banner_lines);
+            }
+            Err(err) => {
+                self.chat_widget.add_error_message(format!(
+                    "Failed to restart session after updating agent limits: {err}"
+                ));
+            }
+        }
+        tui.frame_requester().schedule_frame();
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         tui: &mut tui::Tui,
@@ -1417,6 +1465,100 @@ impl App {
                         );
                     }
                 }
+            }
+            AppEvent::SetAgentMaxThreads { max_threads } => {
+                if self.config.agent_max_threads == max_threads {
+                    self.chat_widget.add_info_message(
+                        format!(
+                            "Sub-agent max threads are already {}.",
+                            match max_threads {
+                                Some(max_threads) => max_threads.to_string(),
+                                None => "unlimited".to_string(),
+                            }
+                        ),
+                        None,
+                    );
+                    return Ok(AppRunControl::Continue);
+                }
+
+                self.config.agent_max_threads = max_threads;
+                self.chat_widget.set_agent_max_threads(max_threads);
+
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(self.active_profile.as_deref())
+                    .set_agent_max_threads(max_threads)
+                    .apply()
+                    .await
+                {
+                    tracing::error!(error = %err, "failed to persist agent max threads");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to save sub-agent max threads: {err}"));
+                }
+
+                let limit = match max_threads {
+                    Some(max_threads) => max_threads.to_string(),
+                    None => "unlimited".to_string(),
+                };
+                self.restart_current_session(
+                    tui,
+                    vec![
+                        Line::from(format!(
+                            "Sub-agent max threads set to {limit} for this run. Restarting the agent session to apply."
+                        )),
+                        Line::from(
+                            "Tip: use /max-threads -1 for unlimited or /max-threads 0 to disable spawned agents."
+                                .to_string(),
+                        ),
+                    ],
+                )
+                .await;
+            }
+            AppEvent::SetAgentMaxDepth { max_depth } => {
+                if self.config.agent_max_depth == max_depth {
+                    self.chat_widget.add_info_message(
+                        format!(
+                            "Sub-agent max depth is already {}.",
+                            match max_depth {
+                                Some(max_depth) => max_depth.to_string(),
+                                None => "unlimited".to_string(),
+                            }
+                        ),
+                        None,
+                    );
+                    return Ok(AppRunControl::Continue);
+                }
+
+                self.config.agent_max_depth = max_depth;
+                self.chat_widget.set_agent_max_depth(max_depth);
+
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(self.active_profile.as_deref())
+                    .set_agent_max_depth(max_depth)
+                    .apply()
+                    .await
+                {
+                    tracing::error!(error = %err, "failed to persist agent max depth");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to save sub-agent max depth: {err}"));
+                }
+
+                let limit = match max_depth {
+                    Some(max_depth) => max_depth.to_string(),
+                    None => "unlimited".to_string(),
+                };
+                self.restart_current_session(
+                    tui,
+                    vec![
+                        Line::from(format!(
+                            "Sub-agent max depth set to {limit} for this run. Restarting the agent session to apply."
+                        )),
+                        Line::from(
+                            "Tip: use /max-depth -1 for unlimited or /max-depth 0 to prevent child spawns."
+                                .to_string(),
+                        ),
+                    ],
+                )
+                .await;
             }
             AppEvent::UpdateFeatureFlags { updates } => {
                 if updates.is_empty() {

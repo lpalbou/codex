@@ -66,6 +66,18 @@ pub struct Cli {
     #[arg(long = "base-url")]
     pub base_url: Option<String>,
 
+    /// Maximum number of spawned sub-agents allowed for this run.
+    ///
+    /// Use `-1` for unlimited and `0` to disable spawned agents.
+    #[arg(long = "max-threads", allow_hyphen_values = true)]
+    pub max_threads: Option<i64>,
+
+    /// Maximum nesting depth allowed for spawned sub-agents for this run.
+    ///
+    /// Root sessions start at depth `0`. Use `-1` for unlimited and `0` to disable child spawns.
+    #[arg(long = "max-depth", allow_hyphen_values = true)]
+    pub max_depth: Option<i64>,
+
     /// Convenience flag to select the local open source model provider. Equivalent to -c
     /// model_provider=oss; verifies a local LM Studio or Ollama server is running.
     #[arg(long = "oss", default_value_t = false)]

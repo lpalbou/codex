@@ -664,6 +664,32 @@ impl ConfigEditsBuilder {
         self
     }
 
+    pub fn set_agent_max_threads(mut self, max_threads: Option<usize>) -> Self {
+        match max_threads {
+            Some(max_threads) => self.edits.push(ConfigEdit::SetPath {
+                segments: vec!["agents".to_string(), "max_threads".to_string()],
+                value: value(i64::try_from(max_threads).unwrap_or(i64::MAX)),
+            }),
+            None => self.edits.push(ConfigEdit::ClearPath {
+                segments: vec!["agents".to_string(), "max_threads".to_string()],
+            }),
+        }
+        self
+    }
+
+    pub fn set_agent_max_depth(mut self, max_depth: Option<usize>) -> Self {
+        match max_depth {
+            Some(max_depth) => self.edits.push(ConfigEdit::SetPath {
+                segments: vec!["agents".to_string(), "max_depth".to_string()],
+                value: value(i64::try_from(max_depth).unwrap_or(i64::MAX)),
+            }),
+            None => self.edits.push(ConfigEdit::ClearPath {
+                segments: vec!["agents".to_string(), "max_depth".to_string()],
+            }),
+        }
+        self
+    }
+
     pub fn with_edits<I>(mut self, edits: I) -> Self
     where
         I: IntoIterator<Item = ConfigEdit>,

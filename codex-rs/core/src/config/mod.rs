@@ -292,6 +292,21 @@ pub struct Config {
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
 
+    /// Maximum number of spawned agent threads allowed for this session.
+    ///
+    /// `None` means unlimited.
+    pub agent_max_threads: Option<usize>,
+
+    /// Maximum nesting depth allowed for spawned agent threads.
+    ///
+    /// `None` means unlimited. Root sessions start at depth `0`.
+    pub agent_max_depth: Option<usize>,
+
+    /// Runtime-only current spawn depth for this session.
+    ///
+    /// Root sessions start at `0`. Child sessions increment this value when they are spawned.
+    pub agent_spawn_depth: usize,
+
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
     pub codex_home: PathBuf,
@@ -903,6 +918,9 @@ pub struct ConfigToml {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
+    /// Base URL override for the built-in `openai` provider.
+    pub openai_base_url: Option<String>,
+
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
     /// Controls the web search tool mode: disabled, cached, or live.
@@ -910,6 +928,9 @@ pub struct ConfigToml {
 
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
+
+    /// Agent-related settings.
+    pub agents: Option<AgentsToml>,
 
     /// Centralized feature flags (new). Prefer this over individual toggles.
     #[serde(default)]
@@ -1161,8 +1182,28 @@ pub struct ConfigOverrides {
     pub hide_agent_reasoning: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
+    pub agent_max_threads: Option<Option<usize>>,
+    pub agent_max_depth: Option<Option<usize>>,
+    pub openai_base_url: Option<String>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AgentsToml {
+    /// Maximum number of spawned agent threads that can be open concurrently.
+    ///
+    /// `0` disables spawned agents. When unset, no limit is enforced.
+    #[schemars(range(min = 0))]
+    pub max_threads: Option<usize>,
+
+    /// Maximum nesting depth allowed for spawned agent threads.
+    ///
+    /// Root sessions start at depth `0`, so `0` disables child spawning entirely.
+    /// When unset, no limit is enforced.
+    #[schemars(range(min = 0))]
+    pub max_depth: Option<usize>,
 }
 
 /// Resolves the OSS provider from CLI override, profile config, or global config.
@@ -1249,6 +1290,9 @@ impl Config {
             hide_agent_reasoning,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
+            agent_max_threads: agent_max_threads_override,
+            agent_max_depth: agent_max_depth_override,
+            openai_base_url: openai_base_url_override,
             additional_writable_roots,
         } = overrides;
 
@@ -1346,7 +1390,16 @@ impl Config {
             || config_profile.sandbox_mode.is_some()
             || cfg.sandbox_mode.is_some();
 
+        let openai_base_url = openai_base_url_override
+            .or(cfg.openai_base_url)
+            .filter(|value| !value.trim().is_empty());
+
         let mut model_providers = built_in_model_providers();
+        if let Some(openai_base_url) = openai_base_url
+            && let Some(provider) = model_providers.get_mut("openai")
+        {
+            provider.base_url = Some(openai_base_url);
+        }
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
             model_providers.entry(key).or_insert(provider);
@@ -1369,6 +1422,10 @@ impl Config {
         let shell_environment_policy = cfg.shell_environment_policy.into();
 
         let history = cfg.history.unwrap_or_default();
+        let agent_max_threads = agent_max_threads_override
+            .unwrap_or_else(|| cfg.agents.as_ref().and_then(|agents| agents.max_threads));
+        let agent_max_depth = agent_max_depth_override
+            .unwrap_or_else(|| cfg.agents.as_ref().and_then(|agents| agents.max_depth));
 
         let ghost_snapshot = {
             let mut config = GhostSnapshotConfig::default();
@@ -1513,6 +1570,9 @@ impl Config {
                 })
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
+            agent_max_threads,
+            agent_max_depth,
+            agent_spawn_depth: 0,
             codex_home,
             config_layer_stack,
             history,
@@ -3608,6 +3668,9 @@ model_verbosity = "high"
                 project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
                 project_doc_fallback_filenames: Vec::new(),
                 tool_output_token_limit: None,
+                agent_max_threads: None,
+                agent_max_depth: None,
+                agent_spawn_depth: 0,
                 codex_home: fixture.codex_home(),
                 config_layer_stack: Default::default(),
                 history: History::default(),
@@ -3695,6 +3758,9 @@ model_verbosity = "high"
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
+            agent_max_threads: None,
+            agent_max_depth: None,
+            agent_spawn_depth: 0,
             codex_home: fixture.codex_home(),
             config_layer_stack: Default::default(),
             history: History::default(),
@@ -3797,6 +3863,9 @@ model_verbosity = "high"
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
+            agent_max_threads: None,
+            agent_max_depth: None,
+            agent_spawn_depth: 0,
             codex_home: fixture.codex_home(),
             config_layer_stack: Default::default(),
             history: History::default(),
@@ -3885,6 +3954,9 @@ model_verbosity = "high"
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
+            agent_max_threads: None,
+            agent_max_depth: None,
+            agent_spawn_depth: 0,
             codex_home: fixture.codex_home(),
             config_layer_stack: Default::default(),
             history: History::default(),

@@ -254,6 +254,38 @@ const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
 const NUDGE_MODEL_SLUG: &str = "gpt-5.1-codex-mini";
 const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
 
+fn format_agent_limit(limit: Option<usize>) -> String {
+    match limit {
+        Some(limit) => limit.to_string(),
+        None => "unlimited".to_string(),
+    }
+}
+
+fn parse_agent_limit_arg(command: &str, raw: &str) -> Result<Option<usize>, String> {
+    let trimmed = raw.trim();
+    if trimmed.eq_ignore_ascii_case("status") {
+        return Err(format!(
+            "Use '/{command}' with no argument to inspect the current value."
+        ));
+    }
+    if matches!(
+        trimmed.to_ascii_lowercase().as_str(),
+        "-1" | "none" | "off" | "unlimited"
+    ) {
+        return Ok(None);
+    }
+
+    let value = trimmed
+        .parse::<i64>()
+        .map_err(|_| format!("Invalid value '{trimmed}'. Use -1 or a non-negative integer."))?;
+    if value < -1 {
+        return Err("Value must be -1 or a non-negative integer.".to_string());
+    }
+    usize::try_from(value)
+        .map(Some)
+        .map_err(|_| "Value is too large for this platform.".to_string())
+}
+
 #[derive(Default)]
 struct RateLimitWarningState {
     secondary_index: usize,
@@ -2105,6 +2137,24 @@ impl ChatWidget {
             SlashCommand::Status => {
                 self.add_status_output();
             }
+            SlashCommand::MaxThreads => {
+                self.add_info_message(
+                    format!(
+                        "Sub-agent max threads: {}.",
+                        format_agent_limit(self.config.agent_max_threads)
+                    ),
+                    None,
+                );
+            }
+            SlashCommand::MaxDepth => {
+                self.add_info_message(
+                    format!(
+                        "Sub-agent max depth: {}.",
+                        format_agent_limit(self.config.agent_max_depth)
+                    ),
+                    None,
+                );
+            }
             SlashCommand::Context => {
                 self.app_event_tx.send(AppEvent::OpenContextOverlay {
                     view: ContextOverlayView::Overview,
@@ -2206,6 +2256,20 @@ impl ChatWidget {
                     },
                 });
             }
+            SlashCommand::MaxThreads => match parse_agent_limit_arg(cmd.command(), trimmed) {
+                Ok(max_threads) => {
+                    self.app_event_tx
+                        .send(AppEvent::SetAgentMaxThreads { max_threads });
+                }
+                Err(message) => self.add_error_message(message),
+            },
+            SlashCommand::MaxDepth => match parse_agent_limit_arg(cmd.command(), trimmed) {
+                Ok(max_depth) => {
+                    self.app_event_tx
+                        .send(AppEvent::SetAgentMaxDepth { max_depth });
+                }
+                Err(message) => self.add_error_message(message),
+            },
             SlashCommand::Collab if trimmed.is_empty() => {
                 self.dispatch_command(cmd);
             }
@@ -4067,6 +4131,14 @@ impl ChatWidget {
     /// Set the reasoning effort in the widget's config copy.
     pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.config.model_reasoning_effort = effort;
+    }
+
+    pub(crate) fn set_agent_max_threads(&mut self, max_threads: Option<usize>) {
+        self.config.agent_max_threads = max_threads;
+    }
+
+    pub(crate) fn set_agent_max_depth(&mut self, max_depth: Option<usize>) {
+        self.config.agent_max_depth = max_depth;
     }
 
     /// Set the model in the widget's config copy.

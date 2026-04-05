@@ -17,15 +17,10 @@ use codex_protocol::user_input::UserInput;
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::session_prefix::is_session_prefix;
 use crate::user_instructions::SkillInstructions;
 use crate::user_instructions::UserInstructions;
 use crate::user_shell_command::is_user_shell_command_text;
-
-fn is_session_prefix(text: &str) -> bool {
-    let trimmed = text.trim_start();
-    let lowered = trimmed.to_ascii_lowercase();
-    lowered.starts_with("<environment_context>")
-}
 
 fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
     if UserInstructions::is_user_instructions(message)
@@ -289,6 +284,13 @@ mod tests {
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
                     text: "<environment_context>test_text</environment_context>".to_string(),
+                }],
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "<subagent_notification>{\"agent_id\":\"a\",\"status\":\"done\"}</subagent_notification>".to_string(),
                 }],
             },
             ResponseItem::Message {

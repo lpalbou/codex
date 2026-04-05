@@ -193,6 +193,16 @@ pub(crate) enum AppEvent {
     /// Update the current sandbox policy in the running app and widget.
     UpdateSandboxPolicy(SandboxPolicy),
 
+    /// Update the spawned sub-agent thread limit for the running session.
+    SetAgentMaxThreads {
+        max_threads: Option<usize>,
+    },
+
+    /// Update the spawned sub-agent depth limit for the running session.
+    SetAgentMaxDepth {
+        max_depth: Option<usize>,
+    },
+
     /// Update feature flags and persist them to the top-level config.
     UpdateFeatureFlags {
         updates: Vec<(Feature, bool)>,
